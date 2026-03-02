@@ -1,0 +1,343 @@
+---
+title: "PolymerProver"
+description: "Prover implementation using Polymer's cross-chain messaging system"
+---
+
+## Overview
+
+`PolymerProver` processes proof messages from Polymer's CrossL2ProverV2 and records proven intents. Unlike other provers, it uses log event proofs rather than direct cross-chain messaging.
+
+**Contract:** `contracts/prover/PolymerProver.sol`
+
+**Inheritance:** `BaseProver`, `Whitelist`, `Semver`
+
+**Proof Type:** `"Polymer"`
+
+<Note>
+  Polymer uses **chain IDs** (not custom domain IDs) and validates cross-chain events through cryptographic proofs of event logs.
+</Note>
+
+## Constructor
+
+```solidity
+constructor(
+    address _portal,
+    address _crossL2ProverV2,
+    uint256 _maxLogDataSize,
+    bytes32[] memory _proverAddresses
+)
+```
+
+Initializes the PolymerProver contract.
+
+<ParamField path="_portal" type="address" required>
+  Address of the Portal contract
+</ParamField>
+
+<ParamField path="_crossL2ProverV2" type="address" required>
+  Address of Polymer's CrossL2ProverV2 contract
+</ParamField>
+
+<ParamField path="_maxLogDataSize" type="uint256" required>
+  Maximum allowed size for encodedProofs in IntentFulfilledFromSource event data. Must be between 1 and 32,768 bytes (32 KB).
+</ParamField>
+
+<ParamField path="_proverAddresses" type="bytes32[]" required>
+  Array of whitelisted prover addresses (as bytes32)
+</ParamField>
+
+**Errors:**
+- `ZeroAddress()`: CrossL2ProverV2 address is zero
+- `InvalidMaxLogDataSize()`: maxLogDataSize is zero or exceeds MAX_LOG_DATA_SIZE_GUARD (32 KB)
+- `ZeroPortal()`: Portal address is zero
+
+**Location:** `contracts/prover/PolymerProver.sol:53`
+
+## State Variables
+
+### CROSS_L2_PROVER_V2
+
+```solidity
+ICrossL2ProverV2 public immutable CROSS_L2_PROVER_V2
+```
+
+Address of Polymer's CrossL2ProverV2 contract used for validating event proofs.
+
+### MAX_LOG_DATA_SIZE
+
+```solidity
+uint256 public MAX_LOG_DATA_SIZE
+```
+
+Maximum allowed size for encodedProofs in event data. Set at construction.
+
+### PROOF_TYPE
+
+```solidity
+string public constant PROOF_TYPE = "Polymer"
+```
+
+Constant indicating this contract uses Polymer for proving.
+
+### PROOF_SELECTOR
+
+```solidity
+bytes32 public constant PROOF_SELECTOR = keccak256("IntentFulfilledFromSource(uint64,bytes)")
+```
+
+Event signature hash for the IntentFulfilledFromSource event.
+
+### Constants
+
+```solidity
+uint256 public constant EXPECTED_TOPIC_LENGTH = 64; // 2 topics * 32 bytes each
+uint256 public constant MAX_LOG_DATA_SIZE_GUARD = 32 * 1024; // 32 KB
+```
+
+## Core Functions
+
+### prove
+
+```solidity
+function prove(
+    address /* unused */,
+    uint64 sourceChainDomainID,
+    bytes calldata encodedProofs,
+    bytes calldata /* unused */
+) external payable
+```
+
+Emits IntentFulfilledFromSource events that can be proven by Polymer.
+
+<ParamField path="sourceChainDomainID" type="uint64" required>
+  Chain ID of the source chain (Polymer uses actual chain IDs, not domain IDs)
+</ParamField>
+
+<ParamField path="encodedProofs" type="bytes" required>
+  Encoded (intentHash, claimant) pairs. Must not exceed MAX_LOG_DATA_SIZE.
+</ParamField>
+
+**Behavior:**
+1. Validates caller is PORTAL
+2. Validates encodedProofs size doesn't exceed MAX_LOG_DATA_SIZE
+3. Emits `IntentFulfilledFromSource(sourceChainDomainID, encodedProofs)`
+
+**Errors:**
+- `OnlyPortal()`: Caller is not the Portal contract
+- `MaxDataSizeExceeded()`: encodedProofs exceeds MAX_LOG_DATA_SIZE
+
+**Access Control:** Only callable by PORTAL
+
+**Note:** This function is payable for compatibility but does not use ETH.
+
+**Location:** `contracts/prover/PolymerProver.sol:194`
+
+### validate
+
+```solidity
+function validate(bytes calldata proof) public
+```
+
+Validates a single proof and processes contained intents.
+
+<ParamField path="proof" type="bytes" required>
+  Proof of an IntentFulfilledFromSource event from Polymer's CrossL2ProverV2
+</ParamField>
+
+**Behavior:**
+1. Calls `CROSS_L2_PROVER_V2.validateEvent(proof)` to verify the event
+2. Validates emitting contract is whitelisted
+3. Validates topics length is 64 bytes (2 topics)
+4. Validates event signature matches PROOF_SELECTOR
+5. Validates source chain ID matches current chain
+6. Validates destination chain ID from proof data
+7. Processes each (intentHash, claimant) pair
+
+**Errors:**
+- `InvalidEmittingContract(address)`: Emitting contract not whitelisted
+- `InvalidTopicsLength()`: Topics length is not 64 bytes
+- `EmptyProofData()`: Data is empty
+- `ArrayLengthMismatch()`: Proof data length is invalid
+- `InvalidEventSignature()`: Event signature doesn't match
+- `InvalidSourceChain()`: Source chain ID doesn't match current chain
+- `InvalidDestinationChain()`: Destination chain from proof data doesn't match validateEvent result
+
+**Location:** `contracts/prover/PolymerProver.sol:83`
+
+### validateBatch
+
+```solidity
+function validateBatch(bytes[] calldata proofs) external
+```
+
+Validates multiple proofs in a batch.
+
+<ParamField path="proofs" type="bytes[]" required>
+  Array of proof data to validate
+</ParamField>
+
+**Behavior:**
+Iterates through each proof and calls `validate(proof)`.
+
+**Location:** `contracts/prover/PolymerProver.sol:73`
+
+### getProofType
+
+```solidity
+function getProofType() external pure override returns (string memory)
+```
+
+**Returns:** `"Polymer"`
+
+## Internal Functions
+
+### processIntent
+
+```solidity
+function processIntent(
+    bytes32 intentHash,
+    address claimant,
+    uint64 destination
+) internal
+```
+
+Processes a single intent proof.
+
+<ParamField path="intentHash" type="bytes32" required>
+  Hash of the intent being proven
+</ParamField>
+
+<ParamField path="claimant" type="address" required>
+  Address that fulfilled the intent and should receive rewards
+</ParamField>
+
+<ParamField path="destination" type="uint64" required>
+  Destination chain ID for the intent
+</ParamField>
+
+**Behavior:**
+- If intent already proven, emits `IntentAlreadyProven` and returns
+- Otherwise, stores proof data and emits `IntentProven`
+
+**Location:** `contracts/prover/PolymerProver.sol:158`
+
+## Events
+
+### IntentFulfilledFromSource
+
+```solidity
+event IntentFulfilledFromSource(
+    uint64 indexed source,
+    bytes encodedProofs
+)
+```
+
+Emitted on the destination chain when `prove()` is called. This event is later proven on the source chain using Polymer's proof system.
+
+<ParamField path="source" type="uint64" required>
+  Chain ID of the source chain (where intent was created)
+</ParamField>
+
+<ParamField path="encodedProofs" type="bytes" required>
+  Encoded (intentHash, claimant) pairs
+</ParamField>
+
+## Proof Validation Flow
+
+<Note>
+  Polymer uses a unique two-step flow:
+
+  1. **Destination Chain:** Call `prove()` on PolymerProver to emit IntentFulfilledFromSource event
+  2. **Source Chain:** Generate event proof using Polymer's infrastructure
+  3. **Source Chain:** Call `validate()` or `validateBatch()` with the proof to process intents
+</Note>
+
+### Event Data Format
+
+The `IntentFulfilledFromSource` event data is ABI-encoded bytes containing:
+
+```
+[chainId (8 bytes)][intentHash1 (32 bytes)][claimant1 (32 bytes)][intentHash2]...
+```
+
+### Validation Steps
+
+1. **CrossL2ProverV2 Validation:**
+   - Polymer's CrossL2ProverV2 cryptographically verifies the event occurred on destination chain
+   - Returns: destinationChainId, emittingContract, topics, data
+
+2. **Authorization Check:**
+   - Validates emittingContract is whitelisted (must be trusted PolymerProver instance)
+
+3. **Event Signature Validation:**
+   - Verifies topics[0] matches PROOF_SELECTOR
+   - Verifies topics[1] (source chain ID) matches current chain
+
+4. **Data Validation:**
+   - Decodes ABI-encoded bytes from event data
+   - Extracts chain ID from first 8 bytes
+   - Verifies chain ID matches destinationChainId from CrossL2ProverV2
+
+5. **Intent Processing:**
+   - Iterates through (intentHash, claimant) pairs
+   - Skips invalid EVM addresses
+   - Stores proof data or emits IntentAlreadyProven
+
+## Usage Example
+
+### On Destination Chain (Intent Fulfillment)
+
+```solidity
+// After fulfilling intent on destination chain, emit proof event
+portal.prove(
+    address(polymerProver),
+    sourceChainId, // Actual chain ID, not domain ID
+    encodedProofs, // (intentHash, claimant) pairs
+    "" // data parameter unused
+);
+
+// This emits IntentFulfilledFromSource(sourceChainId, encodedProofs)
+```
+
+### On Source Chain (Proof Validation)
+
+```solidity
+// Generate proof using Polymer's infrastructure (off-chain)
+bytes memory proof = generatePolymerProof(...);
+
+// Validate proof on source chain
+polymerProver.validate(proof);
+
+// Or validate multiple proofs at once
+bytes[] memory proofs = [proof1, proof2, proof3];
+polymerProver.validateBatch(proofs);
+```
+
+## Domain ID vs Chain ID
+
+<Note>
+  **Polymer uses actual chain IDs**, not custom domain IDs. The `sourceChainDomainID` parameter in `prove()` should be the actual chain ID of the source chain.
+
+  **Examples:**
+  - Ethereum Mainnet: 1
+  - Optimism: 10
+  - Arbitrum: 42161
+  - Base: 8453
+</Note>
+
+## Security Considerations
+
+### Whitelist Management
+
+Only whitelisted prover addresses can emit valid IntentFulfilledFromSource events. This prevents unauthorized proof submissions.
+
+### Max Log Data Size
+
+The MAX_LOG_DATA_SIZE limit prevents:
+- Excessive gas costs during event emission
+- Potential DoS attacks via large event logs
+- Storage bloat from oversized proofs
+
+### Address Validation
+
+The `validate()` function skips non-EVM addresses (where upper 96 bits are non-zero), ensuring compatibility with EVM-based reward claims.

@@ -1,0 +1,366 @@
+---
+title: 'OriginSettler'
+description: 'ERC-7683 compliant contract for opening cross-chain intents on the source chain'
+---
+
+## Overview
+
+The `OriginSettler` contract is the entry point to Eco Routes Protocol via the [ERC-7683](https://eips.ethereum.org/EIPS/eip-7683) standard. It provides a standardized interface for creating cross-chain orders on the origin chain with enhanced security, replay protection, and proper validation.
+
+**Contract Location:** `contracts/ERC7683/OriginSettler.sol`
+
+## ERC-7683 Compliance
+
+This contract implements the ERC-7683 Cross-Chain Intent Settlement standard, which defines a universal interface for cross-chain order creation and settlement. It supports both:
+
+- **Onchain orders**: User directly calls `open()` to create an intent
+- **Gasless orders**: Solver calls `openFor()` with user's EIP-712 signature
+
+## Key Features
+
+- **EIP-712 Signature Verification**: Validates gasless orders using typed structured data hashing
+- **Replay Protection**: Prevents duplicate order execution through vault state checking
+- **Comprehensive Validation**: Checks deadlines, chain IDs, and origin settler addresses
+- **Unified Funding Logic**: Atomic intent creation and funding via `_publishAndFund`
+- **ERC-7683 Standard Events**: Emits `Open` event with resolved order data for off-chain solvers
+
+## Core Functions
+
+### open
+
+```solidity
+function open(OnchainCrossChainOrder calldata order) external payable
+```
+
+Opens a cross-chain order directly on-chain. Called by the user to create and fund an intent atomically.
+
+**Parameters:**
+
+<ParamField path="order" type="OnchainCrossChainOrder">
+  The cross-chain order containing:
+  - `fillDeadline`: Timestamp by which order must be filled
+  - `orderDataType`: Must equal `ORDER_DATA_TYPEHASH`
+  - `orderData`: ABI-encoded `OrderData` struct
+</ParamField>
+
+**Emits:**
+- `Open(bytes32 indexed orderId, ResolvedCrossChainOrder resolvedOrder)`
+
+**Reverts:**
+- `TypeSignatureMismatch()`: If `orderDataType` doesn't match expected hash
+
+**Usage Example:**
+
+```solidity
+OnchainCrossChainOrder memory order = OnchainCrossChainOrder({
+    fillDeadline: uint32(block.timestamp + 1 hours),
+    orderDataType: ORDER_DATA_TYPEHASH,
+    orderData: abi.encode(orderData)
+});
+
+originSettler.open{value: rewardAmount}(order);
+```
+
+---
+
+### openFor
+
+```solidity
+function openFor(
+    GaslessCrossChainOrder calldata order,
+    bytes calldata signature,
+    bytes calldata originFillerData
+) external payable
+```
+
+Opens a gasless cross-chain order on behalf of a user. Called by a solver using the user's EIP-712 signature.
+
+**Parameters:**
+
+<ParamField path="order" type="GaslessCrossChainOrder">
+  The gasless order containing:
+  - `originSettler`: Must match this contract's address
+  - `user`: Address whose signature is verified
+  - `nonce`: Replay protection nonce
+  - `originChainId`: Must match current chain ID
+  - `openDeadline`: Timestamp by which order must be opened
+  - `fillDeadline`: Timestamp by which order must be filled
+  - `orderDataType`: Must equal `ORDER_DATA_TYPEHASH`
+  - `orderData`: ABI-encoded `OrderData` struct
+</ParamField>
+
+<ParamField path="signature" type="bytes">
+  User's EIP-712 signature authorizing the order creation
+</ParamField>
+
+<ParamField path="originFillerData" type="bytes">
+  Optional filler-defined data (currently unused)
+</ParamField>
+
+**Emits:**
+- `Open(bytes32 indexed orderId, ResolvedCrossChainOrder resolvedOrder)`
+
+**Reverts:**
+- `OpenDeadlinePassed()`: If current timestamp exceeds `openDeadline`
+- `InvalidOriginSettler(address expected, address actual)`: If `originSettler` doesn't match this contract
+- `InvalidOriginChainId(uint256 expected, uint256 actual)`: If `originChainId` doesn't match current chain
+- `TypeSignatureMismatch()`: If `orderDataType` doesn't match expected hash
+- `InvalidSignature()`: If signature verification fails
+
+**Replay Protection:**
+
+The contract includes built-in replay protection:
+1. If intent is Withdrawn or Refunded, transaction fails
+2. If intent is Initial, it publishes and funds the intent
+3. If intent is Funded, it publishes but doesn't double-fund
+
+---
+
+### resolve
+
+```solidity
+function resolve(
+    OnchainCrossChainOrder calldata order
+) public view returns (ResolvedCrossChainOrder memory)
+```
+
+Resolves an onchain order into ERC-7683 compliant `ResolvedCrossChainOrder` format for off-chain solvers.
+
+**Parameters:**
+
+<ParamField path="order" type="OnchainCrossChainOrder">
+  The order to resolve
+</ParamField>
+
+**Returns:**
+
+<ParamField type="ResolvedCrossChainOrder">
+  Standardized order format containing:
+  - `user`: Intent creator address
+  - `originChainId`: Current chain ID
+  - `openDeadline`: Block timestamp when resolved
+  - `fillDeadline`: Route execution deadline
+  - `orderId`: Intent hash
+  - `maxSpent`: Maximum outputs filler will send
+  - `minReceived`: Minimum rewards filler receives (on origin chain)
+  - `fillInstructions`: Array with destination chain, portal, and `(route, rewardHash)`
+</ParamField>
+
+---
+
+### resolveFor
+
+```solidity
+function resolveFor(
+    GaslessCrossChainOrder calldata order,
+    bytes calldata originFillerData
+) external view returns (ResolvedCrossChainOrder memory)
+```
+
+Resolves a gasless order into ERC-7683 compliant format.
+
+**Parameters:**
+
+<ParamField path="order" type="GaslessCrossChainOrder">
+  The gasless order to resolve
+</ParamField>
+
+<ParamField path="originFillerData" type="bytes">
+  Optional filler data (currently unused)
+</ParamField>
+
+**Returns:**
+
+<ParamField type="ResolvedCrossChainOrder">
+  Standardized order format (same structure as `resolve`)
+</ParamField>
+
+---
+
+### domainSeparatorV4
+
+```solidity
+function domainSeparatorV4() public view returns (bytes32)
+```
+
+Returns the EIP-712 domain separator used for signature verification.
+
+**Returns:**
+
+<ParamField type="bytes32">
+  Domain separator with name "EcoPortal" and version "1"
+</ParamField>
+
+---
+
+## Abstract Methods
+
+### _publishAndFund
+
+```solidity
+function _publishAndFund(
+    uint64 destination,
+    bytes memory route,
+    Reward memory reward,
+    bool allowPartial,
+    address funder
+) internal virtual returns (bytes32 intentHash, address vault)
+```
+
+Core method for atomic intent creation and funding. Must be implemented by derived contracts.
+
+**Parameters:**
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID where the intent should be executed
+</ParamField>
+
+<ParamField path="route" type="bytes">
+  Encoded route data containing execution instructions for destination chain
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure containing token amounts, creator, prover, and deadline
+</ParamField>
+
+<ParamField path="allowPartial" type="bool">
+  Whether to accept partial funding if full funding is not possible
+</ParamField>
+
+<ParamField path="funder" type="address">
+  Address providing the funding (`msg.sender` for `open()`, `order.user` for `openFor()`)
+</ParamField>
+
+**Returns:**
+
+<ParamField path="intentHash" type="bytes32">
+  Unique identifier of the created or existing intent
+</ParamField>
+
+<ParamField path="vault" type="address">
+  Address of the intent's vault contract for reward escrow
+</ParamField>
+
+---
+
+## Events
+
+### Open
+
+```solidity
+event Open(bytes32 indexed orderId, ResolvedCrossChainOrder resolvedOrder)
+```
+
+Emitted when an order is successfully opened via `open()` or `openFor()`.
+
+**Parameters:**
+
+<ParamField path="orderId" type="bytes32 indexed">
+  Unique identifier for the order (intent hash)
+</ParamField>
+
+<ParamField path="resolvedOrder" type="ResolvedCrossChainOrder">
+  ERC-7683 compliant resolved order data for off-chain solvers
+</ParamField>
+
+---
+
+## Errors
+
+### TypeSignatureMismatch
+
+```solidity
+error TypeSignatureMismatch()
+```
+
+Thrown when `orderDataType` doesn't match `ORDER_DATA_TYPEHASH`.
+
+### InvalidOriginChainId
+
+```solidity
+error InvalidOriginChainId(uint256 expected, uint256 actual)
+```
+
+Thrown when the origin chain ID in the order doesn't match the current chain.
+
+### OpenDeadlinePassed
+
+```solidity
+error OpenDeadlinePassed()
+```
+
+Thrown when attempting to open an order after the `openDeadline` has passed.
+
+### InvalidSignature
+
+```solidity
+error InvalidSignature()
+```
+
+Thrown when EIP-712 signature verification fails.
+
+### InvalidOriginSettler
+
+```solidity
+error InvalidOriginSettler(address expected, address actual)
+```
+
+Thrown when the `originSettler` address in the order doesn't match this contract.
+
+### InsufficientNativeRewardAmount
+
+```solidity
+error InsufficientNativeRewardAmount()
+```
+
+Thrown when sent native token amount is less than required reward amount.
+
+---
+
+## EIP-712 Type Hashes
+
+### GASLESS_CROSSCHAIN_ORDER_TYPEHASH
+
+```solidity
+bytes32 public GASLESS_CROSSCHAIN_ORDER_TYPEHASH = keccak256(
+    "GaslessCrossChainOrder(address originSettler,address user,uint256 nonce,uint256 originChainId,uint32 openDeadline,uint32 fillDeadline,bytes32 orderDataType,bytes32 orderDataHash)"
+)
+```
+
+EIP-712 type hash for gasless cross-chain orders used in signature verification.
+
+---
+
+## Implementation Notes
+
+### Security Features
+
+1. **Replay Protection**: The `_publishAndFund` method checks vault state to prevent duplicate funding
+2. **Deadline Validation**: Both open and fill deadlines are validated to ensure timely execution
+3. **Chain ID Verification**: Ensures orders are executed on the correct chain
+4. **Signature Verification**: Uses EIP-712 for secure off-chain authorization
+
+### Gas Optimization
+
+- Uses `uint32` for timestamps (safe until year 2106)
+- Efficient ABI encoding/decoding of nested structs
+- Direct `orderData.maxSpent` usage instead of reconstruction
+
+### Integration Guide
+
+To integrate with OriginSettler:
+
+1. Encode your `OrderData` with destination, route, reward, portal, deadline, and maxSpent
+2. For onchain orders: call `open()` with proper `msg.value` for native rewards
+3. For gasless orders: obtain user's EIP-712 signature and call `openFor()`
+4. Listen for `Open` events to track order creation
+5. Use `resolve()` or `resolveFor()` to get standardized order format for solvers
+
+---
+
+## Related
+
+- [DestinationSettler](/api/erc7683/destination-settler) - Settlement contract on destination chain
+- [OrderData Type](/api/types/intent#orderdata) - Order data structure
+- [Reward Type](/api/types/reward) - Reward structure
+- [ERC-7683 Standard](https://eips.ethereum.org/EIPS/eip-7683) - Official EIP specification

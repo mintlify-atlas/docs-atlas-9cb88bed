@@ -1,0 +1,217 @@
+---
+title: "Users, Solvers, and Provers"
+description: "Understanding the three key roles in the Eco Routes Protocol"
+---
+
+## Overview
+
+The Eco Routes Protocol operates through the interaction of three distinct participant types, each with specific responsibilities in the cross-chain intent lifecycle.
+
+## Users
+
+**Users** are the intent creators who want to execute actions on destination chains.
+
+### Responsibilities
+
+- **Create intents** specifying desired cross-chain actions
+- **Fund rewards** to incentivize solvers to fulfill their intents
+- **Set deadlines** for when intents must be executed
+- **Specify execution details** including target contracts and function calls
+
+### User Actions
+
+Users interact with the `IntentSource` contract on the source chain:
+
+#### Publishing an Intent
+
+```solidity contracts/IntentSource.sol
+function publish(
+    Intent calldata intent
+) public returns (bytes32 intentHash, address vault)
+```
+
+Creates an intent without funding it immediately.
+
+#### Publishing and Funding
+
+```solidity contracts/IntentSource.sol
+function publishAndFund(
+    Intent calldata intent,
+    bool allowPartial
+) public payable returns (bytes32 intentHash, address vault)
+```
+
+Creates and funds an intent in a single transaction.
+
+#### Funding an Existing Intent
+
+```solidity contracts/IntentSource.sol
+function fund(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward,
+    bool allowPartial
+) external payable returns (bytes32 intentHash)
+```
+
+Adds funds to an already published intent.
+
+#### Refunding
+
+```solidity contracts/IntentSource.sol
+function refund(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward
+) external
+```
+
+Returns rewards to the creator if the intent expires unfulfilled.
+
+<Note>
+Users can only refund intents after the deadline has passed and only if the intent hasn't been proven as fulfilled.
+</Note>
+
+## Solvers
+
+**Solvers** (also called fillers) are the executors who fulfill intents on destination chains in exchange for rewards.
+
+### Responsibilities
+
+- **Monitor** published intents across chains
+- **Provide liquidity** for the tokens and native currency needed for execution
+- **Execute** the intent's calls on the destination chain
+- **Claim** the claimant identifier to receive rewards
+
+### Solver Actions
+
+Solvers interact with the `Inbox` contract on the destination chain:
+
+#### Fulfilling an Intent
+
+```solidity contracts/Inbox.sol
+function fulfill(
+    bytes32 intentHash,
+    Route memory route,
+    bytes32 rewardHash,
+    bytes32 claimant
+) external payable returns (bytes[] memory)
+```
+
+Executes the intent's calls and marks it as fulfilled with a claimant identifier.
+
+#### Fulfilling and Proving
+
+```solidity contracts/Inbox.sol
+function fulfillAndProve(
+    bytes32 intentHash,
+    Route memory route,
+    bytes32 rewardHash,
+    bytes32 claimant,
+    address prover,
+    uint64 sourceChainDomainID,
+    bytes memory data
+) public payable returns (bytes[] memory)
+```
+
+Fulfills the intent and immediately initiates the proving process in one transaction.
+
+### Claimant Identifier
+
+The `claimant` is a `bytes32` identifier that represents who will receive the rewards:
+
+- On EVM chains, this is typically the solver's address converted to `bytes32`
+- The claimant is stored in the Inbox's claimants mapping: `mapping(bytes32 => bytes32) public claimants`
+- This identifier is used by provers to determine who receives rewards on the source chain
+
+<Info>
+Solvers must provide the tokens and native currency specified in the route upfront. They are compensated through the reward once the intent is proven.
+</Info>
+
+### Economic Model
+
+Solvers are incentivized through rewards that should exceed their costs:
+
+- **Revenue**: Reward tokens and native currency from the intent creator
+- **Costs**: Route execution tokens, gas fees, capital opportunity cost
+- **Profit**: Reward value minus costs
+
+## Provers
+
+**Provers** are smart contracts that verify intent fulfillment and enable reward distribution on the source chain.
+
+### Responsibilities
+
+- **Verify** that intents were correctly fulfilled on destination chains
+- **Transmit proofs** back to the source chain
+- **Store** proof data linking intents to claimants
+- **Validate** withdrawal requests
+
+### Prover Architecture
+
+The protocol supports multiple prover implementations:
+
+- **HyperProver** - Uses Hyperlane for cross-chain messaging
+- **MetaProver** - Uses Caldera Metalayer for cross-chain messaging
+- **LayerZeroProver** - Uses LayerZero for cross-chain messaging
+- **PolymerProver** - Uses Polymer for cross-chain messaging
+- **LocalProver** - For same-chain proving (testing/special cases)
+
+### Proving Process
+
+After a solver fulfills an intent, the prover:
+
+1. Receives proof initiation from the destination chain
+2. Transmits claimant data to the source chain via cross-chain messaging
+3. Stores the proof in its `provenIntents` mapping:
+
+```solidity
+struct ProofData {
+    uint64 destination;
+    address claimant;
+}
+
+mapping(bytes32 => ProofData) public provenIntents;
+```
+
+### Proof Validation
+
+When rewards are withdrawn, the IntentSource contract checks the prover:
+
+```solidity contracts/IntentSource.sol
+function withdraw(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward
+) public {
+    (bytes32 intentHash, , bytes32 rewardHash) = getIntentHash(
+        destination,
+        routeHash,
+        reward
+    );
+
+    IProver.ProofData memory proof = IProver(reward.prover).provenIntents(
+        intentHash
+    );
+    address claimant = proof.claimant;
+    
+    // Validates proof and transfers rewards to claimant
+    // ...
+}
+```
+
+<Note>
+The prover specified in the intent's reward struct determines which proving mechanism is used. Users should choose provers based on their security requirements and supported chain pairs.
+</Note>
+
+## Interaction Flow
+
+1. **User** creates and funds an intent on the source chain
+2. **Solver** monitors for funded intents and selects profitable ones
+3. **Solver** fulfills the intent on the destination chain with their claimant identifier
+4. **Prover** verifies the fulfillment and transmits proof to the source chain
+5. **Solver** (or anyone) withdraws rewards to the claimant address on the source chain
+
+<Info>
+Anyone can call the withdraw function, but rewards always go to the claimant specified by the solver during fulfillment. This enables permissionless reward distribution.
+</Info>

@@ -1,0 +1,419 @@
+---
+title: 'Route'
+description: 'Routing and execution instructions for cross-chain message delivery and execution'
+---
+
+## Overview
+
+The `Route` struct defines the complete set of instructions for executing a cross-chain message on the destination chain. It specifies where to send the message, what calls to make, what tokens are required, and the execution deadline.
+
+**Type Location:** `contracts/types/Intent.sol`
+
+---
+
+## Route
+
+```solidity
+struct Route {
+    bytes32 salt;
+    uint64 deadline;
+    address portal;
+    uint256 nativeAmount;
+    TokenAmount[] tokens;
+    Call[] calls;
+}
+```
+
+Defines the routing and execution instructions for cross-chain messages.
+
+### Fields
+
+<ParamField path="salt" type="bytes32">
+  Unique identifier provided by the intent creator to prevent duplicate intents.
+
+  **Purpose:**
+  - Ensures intent uniqueness even with identical execution parameters
+  - Prevents replay attacks and duplicate submissions
+  - Allows creating multiple similar intents with different salts
+
+  **Generation:**
+  ```solidity
+  bytes32 salt = keccak256(abi.encodePacked(
+      msg.sender,
+      block.timestamp,
+      nonce
+  ));
+  ```
+
+  **Best Practice:** Use a combination of user address, timestamp, and a user-specific nonce to ensure global uniqueness.
+</ParamField>
+
+<ParamField path="deadline" type="uint64">
+  Timestamp by which the route must be executed on the destination chain.
+
+  **Format:** Unix timestamp (seconds since epoch)
+
+  **Validation:**
+  - Must be greater than current `block.timestamp` when intent is created
+  - Should be less than `reward.deadline` to allow time for proof submission
+  - Typical range: 10 minutes to 24 hours from intent creation
+
+  **Example:**
+  ```solidity
+  uint64 deadline = uint64(block.timestamp + 1 hours);
+  ```
+
+  **Note:** Using `uint64` is safe until the year 2262 (far beyond uint32's 2106 limit).
+</ParamField>
+
+<ParamField path="portal" type="address">
+  Address of the portal contract on the destination chain that receives and processes the message.
+
+  **Role:**
+  - Receives the cross-chain message from the prover
+  - Validates message authenticity and authorization
+  - Executes the route's calls in sequence
+  - Handles token transfers and native token forwarding
+
+  **Requirements:**
+  - Must implement the `IPortal` interface
+  - Must be deployed at the same address on the destination chain
+  - Should be a trusted contract authorized to make calls on behalf of users
+
+  **Example:**
+  ```solidity
+  address portal = 0x1234567890123456789012345678901234567890;
+  ```
+</ParamField>
+
+<ParamField path="nativeAmount" type="uint256">
+  Amount of native tokens (in wei) to send with the route execution.
+
+  **Purpose:**
+  - Provides native tokens for executing calls that require ETH/native payment
+  - Covers gas costs for complex execution sequences
+  - Enables native token swaps or transfers
+
+  **Source:**
+  - Provided by the solver/filler when executing `fill()` on destination chain
+  - Must be included in `maxSpent` outputs in ERC-7683 orders
+
+  **Example:**
+  ```solidity
+  uint256 nativeAmount = 0.5 ether;  // 0.5 native tokens
+  ```
+
+  **Note:** Use `0` if no native tokens are required for execution.
+</ParamField>
+
+<ParamField path="tokens" type="TokenAmount[]">
+  Array of ERC20 tokens and amounts required for execution of calls on the destination chain.
+
+  **Purpose:**
+  - Specifies which tokens the solver must provide
+  - Portal transfers these tokens to call targets as needed
+  - Enables token swaps, liquidity provision, and multi-token operations
+
+  **Structure:**
+  ```solidity
+  struct TokenAmount {
+      address token;   // ERC20 token contract address
+      uint256 amount;  // Amount in token's smallest unit
+  }
+  ```
+
+  **Example:**
+  ```solidity
+  TokenAmount[] memory tokens = new TokenAmount[](2);
+  tokens[0] = TokenAmount({
+      token: 0xA0b86...,  // USDC on destination chain
+      amount: 1000 * 10**6  // 1000 USDC (6 decimals)
+  });
+  tokens[1] = TokenAmount({
+      token: 0xDA10...,  // DAI on destination chain
+      amount: 500 * 10**18  // 500 DAI (18 decimals)
+  });
+  ```
+
+  **Important:** Always use the correct decimal precision for each token.
+
+  See [TokenAmount Type](/api/types/intent#tokenamount) for more details.
+</ParamField>
+
+<ParamField path="calls" type="Call[]">
+  Array of contract calls to execute on the destination chain in sequence.
+
+  **Purpose:**
+  - Defines the actual operations to perform (swaps, transfers, contract interactions)
+  - Executed sequentially by the portal contract
+  - Each call can send native tokens and invoke arbitrary contract functions
+
+  **Structure:**
+  ```solidity
+  struct Call {
+      address target;  // Contract to call
+      bytes data;      // ABI-encoded function call
+      uint256 value;   // Native tokens to send with call
+  }
+  ```
+
+  **Example:**
+  ```solidity
+  Call[] memory calls = new Call[](2);
+  
+  // Call 1: Approve USDC spending
+  calls[0] = Call({
+      target: usdcAddress,
+      data: abi.encodeWithSelector(
+          IERC20.approve.selector,
+          uniswapRouter,
+          1000 * 10**6
+      ),
+      value: 0
+  });
+  
+  // Call 2: Swap USDC for ETH
+  calls[1] = Call({
+      target: uniswapRouter,
+      data: abi.encodeWithSelector(
+          ISwapRouter.exactInputSingle.selector,
+          swapParams
+      ),
+      value: 0
+  });
+  ```
+
+  **Execution Order:** Calls are executed in array order. If any call fails, the entire transaction reverts.
+
+  See [Call Type](/api/types/intent#call) for more details.
+</ParamField>
+
+---
+
+## Route Encoding
+
+When used in `OrderData` for ERC-7683 orders, the route is ABI-encoded:
+
+```solidity
+Route memory route = Route({ ... });
+bytes memory encodedRoute = abi.encode(route);
+
+// Include in OrderData
+OrderData memory orderData = OrderData({
+    destination: destinationChainId,
+    route: encodedRoute,  // ABI-encoded Route
+    reward: rewardStruct,
+    routePortal: bytes32(uint256(uint160(route.portal))),
+    routeDeadline: route.deadline,
+    maxSpent: maxSpentOutputs
+});
+```
+
+## Route Hash Calculation
+
+Routes are hashed for intent identification:
+
+```solidity
+bytes32 routeHash = keccak256(abi.encode(route));
+```
+
+This hash is combined with the reward hash and destination to create the unique intent hash:
+
+```solidity
+bytes32 intentHash = keccak256(
+    abi.encodePacked(
+        destination,
+        routeHash,
+        rewardHash
+    )
+);
+```
+
+---
+
+## Usage Examples
+
+### Simple Token Transfer
+
+```solidity
+Route memory route = Route({
+    salt: keccak256(abi.encodePacked(msg.sender, block.timestamp)),
+    deadline: uint64(block.timestamp + 30 minutes),
+    portal: destinationPortalAddress,
+    nativeAmount: 0,
+    tokens: new TokenAmount[](1),
+    calls: new Call[](1)
+});
+
+route.tokens[0] = TokenAmount({
+    token: usdcAddress,
+    amount: 1000 * 10**6  // 1000 USDC
+});
+
+route.calls[0] = Call({
+    target: usdcAddress,
+    data: abi.encodeWithSelector(
+        IERC20.transfer.selector,
+        recipientAddress,
+        1000 * 10**6
+    ),
+    value: 0
+});
+```
+
+### Multi-Step DeFi Operation
+
+```solidity
+Route memory route = Route({
+    salt: keccak256(abi.encodePacked(msg.sender, nonce)),
+    deadline: uint64(block.timestamp + 1 hours),
+    portal: destinationPortalAddress,
+    nativeAmount: 0.1 ether,  // For gas and native operations
+    tokens: new TokenAmount[](1),
+    calls: new Call[](3)
+});
+
+// Token requirement
+route.tokens[0] = TokenAmount({
+    token: daiAddress,
+    amount: 5000 * 10**18  // 5000 DAI
+});
+
+// Step 1: Approve DAI for Aave
+route.calls[0] = Call({
+    target: daiAddress,
+    data: abi.encodeWithSelector(
+        IERC20.approve.selector,
+        aaveLendingPool,
+        5000 * 10**18
+    ),
+    value: 0
+});
+
+// Step 2: Supply DAI to Aave
+route.calls[1] = Call({
+    target: aaveLendingPool,
+    data: abi.encodeWithSelector(
+        ILendingPool.deposit.selector,
+        daiAddress,
+        5000 * 10**18,
+        msg.sender,
+        0
+    ),
+    value: 0
+});
+
+// Step 3: Borrow ETH from Aave
+route.calls[2] = Call({
+    target: aaveLendingPool,
+    data: abi.encodeWithSelector(
+        ILendingPool.borrow.selector,
+        wethAddress,
+        1 * 10**18,
+        2,  // Variable rate
+        0,
+        msg.sender
+    ),
+    value: 0
+});
+```
+
+### Native Token Swap
+
+```solidity
+Route memory route = Route({
+    salt: keccak256(abi.encodePacked(msg.sender, "eth-swap", block.timestamp)),
+    deadline: uint64(block.timestamp + 15 minutes),
+    portal: destinationPortalAddress,
+    nativeAmount: 1 ether,  // 1 ETH to swap
+    tokens: new TokenAmount[](0),  // No ERC20 tokens needed
+    calls: new Call[](1)
+});
+
+route.calls[0] = Call({
+    target: uniswapRouter,
+    data: abi.encodeWithSelector(
+        ISwapRouter.exactInputSingle.selector,
+        ISwapRouter.ExactInputSingleParams({
+            tokenIn: wethAddress,
+            tokenOut: usdcAddress,
+            fee: 3000,
+            recipient: msg.sender,
+            deadline: block.timestamp + 15 minutes,
+            amountIn: 1 ether,
+            amountOutMinimum: 2000 * 10**6,  // Min 2000 USDC
+            sqrtPriceLimitX96: 0
+        })
+    ),
+    value: 1 ether  // Send ETH with the call
+});
+```
+
+---
+
+## Validation and Security
+
+### Pre-Execution Checks
+
+Before executing a route, implementations should validate:
+
+1. **Deadline:** `block.timestamp <= route.deadline`
+2. **Portal:** Portal address matches expected contract
+3. **Token Balances:** Portal has sufficient tokens after solver transfers
+4. **Native Amount:** Sufficient native tokens provided with `fill()` call
+
+### Execution Safety
+
+1. **Sequential Execution:** Calls execute in order; any failure reverts entire transaction
+2. **Reentrancy Protection:** Portal should implement reentrancy guards
+3. **Token Approvals:** Ensure tokens are approved for portal before execution
+4. **Gas Limits:** Complex routes may hit gas limits; test thoroughly
+
+### Best Practices
+
+1. **Salt Generation:** Use unique, unpredictable salts to prevent collisions
+2. **Deadline Setting:** Allow enough time for cross-chain message delivery (10-60 minutes typical)
+3. **Token Precision:** Always use correct decimal places for token amounts
+4. **Call Ordering:** Order calls logically (approvals before transfers, etc.)
+5. **Error Handling:** Design calls to fail gracefully with clear error messages
+6. **Gas Estimation:** Test routes on destination chain to ensure gas efficiency
+
+---
+
+## Integration with ERC-7683
+
+The `Route` is central to ERC-7683 integration:
+
+1. **Order Creation:** Route encoded in `OrderData.route`
+2. **Resolution:** Route hash included in `ResolvedCrossChainOrder.fillInstructions[0].originData`
+3. **Fill Execution:** Route decoded and executed by `DestinationSettler.fill()`
+
+**Origin Chain (Open):**
+```solidity
+bytes memory encodedRoute = abi.encode(route);
+OrderData memory orderData = OrderData({
+    destination: destinationChainId,
+    route: encodedRoute,
+    ...
+});
+```
+
+**Destination Chain (Fill):**
+```solidity
+function fill(bytes32 orderId, bytes calldata originData, bytes calldata fillerData) external payable {
+    (bytes memory encodedRoute, bytes32 rewardHash) = abi.decode(originData, (bytes, bytes32));
+    Route memory route = abi.decode(encodedRoute, (Route));
+    
+    // Execute route...
+}
+```
+
+---
+
+## Related
+
+- [Intent Type](/api/types/intent) - Complete intent structure including route
+- [Reward Type](/api/types/reward) - Reward parameters paired with routes
+- [Call Type](/api/types/intent#call) - Individual call structure details
+- [TokenAmount Type](/api/types/intent#tokenamount) - Token specification format
+- [DestinationSettler](/api/erc7683/destination-settler) - Executes routes on destination chain

@@ -1,0 +1,469 @@
+---
+title: 'Contract Verification'
+description: 'Verify deployed Eco Routes contracts on blockchain explorers'
+---
+
+Contract verification makes your contract source code publicly available on block explorers, enabling transparency and allowing users to interact with contracts directly through explorer interfaces.
+
+## Why Verify Contracts?
+
+- **Transparency**: Users can inspect contract source code
+- **Trust**: Verification proves deployed bytecode matches public source
+- **Interaction**: Block explorers provide UI for contract interaction
+- **Debugging**: Easier to debug transactions with verified contracts
+- **Integration**: Required for some integration tools and services
+
+## Automated Verification
+
+### Using Verification Script
+
+The easiest way to verify all deployed contracts:
+
+```bash
+# Verify all contracts from deployment file
+./scripts/verifyRoutes.sh
+```
+
+This script will:
+- Read deployment data from CSV file
+- Load verification API keys from configuration
+- Verify each contract on its respective block explorer
+- Retry failed verifications automatically
+- Provide detailed verification summary
+
+### Prerequisites for Automated Verification
+
+<Steps>
+  <Step title="Deployment Results File">
+    Ensure `RESULTS_FILE` exists with deployment data:
+    ```bash
+    cat $RESULTS_FILE
+    ```
+    
+    Expected format:
+    ```csv
+    ChainID,ContractAddress,ContractPath,ContractArguments
+    1,0x742d35Cc6634C0532925a3b844Bc454e4438f44e,contracts/Portal.sol:Portal,0x
+    ```
+  </Step>
+  <Step title="Configure Verification Keys">
+    Create verification keys file or set environment variable:
+    
+    **Option 1: JSON File**
+    ```json verification-keys.json
+    {
+      "1": "your_etherscan_api_key",
+      "8453": "your_basescan_api_key",
+      "10": "your_optimistic_etherscan_api_key"
+    }
+    ```
+    
+    **Option 2: Environment Variable**
+    ```bash
+    export VERIFICATION_KEYS='{"1":"etherscan_key","8453":"basescan_key"}'
+    ```
+  </Step>
+  <Step title="Set Environment Variables">
+    ```bash .env
+    # Path to deployment results
+    RESULTS_FILE=out/deploy.csv
+    
+    # Verification keys (file or JSON string)
+    VERIFICATION_KEYS_FILE=verification-keys.json
+    # OR
+    VERIFICATION_KEYS='{"1":"key1","8453":"key2"}'
+    
+    # Chain data for RPC URLs (optional but recommended)
+    CHAIN_DATA_URL="https://raw.githubusercontent.com/eco/eco-chains/refs/heads/main/src/assets/chain.json"
+    ```
+  </Step>
+</Steps>
+
+### Verification Script Features
+
+**Automatic Header Removal**
+- Detects and removes CSV headers before processing
+
+**Retry Logic**
+- Retries failed verifications with 5-second delay
+- Useful for rate limiting or temporary explorer issues
+
+**RPC URL Integration**
+- Uses chain data for more reliable verification
+- Falls back to explorer defaults if not available
+
+**Progress Tracking**
+- Shows verification progress (e.g., "2 of 5")
+- Provides summary statistics at end
+
+**Constructor Arguments**
+- Automatically includes constructor args from deployment data
+- Handles contracts with no constructor args
+
+## Manual Verification
+
+### Verify Using Forge
+
+Verify a single contract manually:
+
+<CodeGroup>
+
+```bash Portal (No Constructor Args)
+# Verify Portal contract
+forge verify-contract \
+  --chain mainnet \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --watch \
+  0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  contracts/Portal.sol:Portal
+```
+
+```bash HyperProver (With Constructor Args)
+# Get constructor args from deployment file
+CONSTRUCTOR_ARGS="0x000000000000000000000000fFAEF09B3cd11D9b20d1a19bECca54EEC2884766..."
+
+# Verify HyperProver
+forge verify-contract \
+  --chain mainnet \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --constructor-args $CONSTRUCTOR_ARGS \
+  --watch \
+  0x8464135c8F25Da09e49BC8782676a84730C318bC \
+  contracts/prover/HyperProver.sol:HyperProver
+```
+
+```bash With Custom RPC
+# Verify using custom RPC URL
+forge verify-contract \
+  --chain 8453 \
+  --etherscan-api-key $BASESCAN_API_KEY \
+  --rpc-url https://base-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --watch \
+  0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  contracts/Portal.sol:Portal
+```
+
+</CodeGroup>
+
+### Verification Flags Explained
+
+| Flag | Description |
+|------|-------------|
+| `--chain` | Network name or chain ID (e.g., `mainnet`, `1`, `sepolia`, `11155111`) |
+| `--etherscan-api-key` | API key for block explorer |
+| `--constructor-args` | ABI-encoded constructor arguments |
+| `--watch` | Wait for verification to complete |
+| `--rpc-url` | Custom RPC endpoint for the chain |
+
+### Constructor Arguments
+
+For contracts with constructor parameters, you need to provide ABI-encoded arguments.
+
+**HyperProver Constructor**
+```solidity
+constructor(
+    address mailbox,
+    address portal,
+    bytes32[] memory provers
+)
+```
+
+**Encode Constructor Args**
+```bash
+# Extract args from deployment CSV
+CONSTRUCTOR_ARGS=$(grep "HyperProver" out/deploy.csv | cut -d',' -f4)
+
+# Or encode manually
+cast abi-encode "constructor(address,address,bytes32[])" \
+  $MAILBOX_ADDRESS \
+  $PORTAL_ADDRESS \
+  "[0x1234...]"
+```
+
+**MetaProver Constructor**
+```solidity
+constructor(
+    address router,
+    address portal,
+    bytes32[] memory provers,
+    uint256 minGasLimit  // 200000
+)
+```
+
+**LayerZeroProver Constructor**
+```solidity
+constructor(
+    address layerZeroEndpoint,
+    address layerZeroDelegate,
+    address portal,
+    bytes32[] memory provers,
+    uint256 minGasLimit  // 200000
+)
+```
+
+**PolymerProver Constructor**
+```solidity
+constructor(
+    address portal,
+    address polymerCrossL2ProverV2,
+    bytes32[] memory provers
+)
+```
+
+## Block Explorer API Keys
+
+### Obtaining API Keys
+
+Get free API keys from block explorers:
+
+<Steps>
+  <Step title="Ethereum (Etherscan)">
+    1. Visit [Etherscan API](https://etherscan.io/apis)
+    2. Create an account
+    3. Generate API key
+    4. Same key works for Sepolia testnet
+  </Step>
+  <Step title="Base (Basescan)">
+    1. Visit [Basescan API](https://basescan.org/apis)
+    2. Create account (separate from Etherscan)
+    3. Generate API key
+  </Step>
+  <Step title="Optimism">
+    1. Visit [Optimistic Etherscan](https://optimistic.etherscan.io/apis)
+    2. Create account
+    3. Generate API key
+  </Step>
+  <Step title="Arbitrum">
+    1. Visit [Arbiscan](https://arbiscan.io/apis)
+    2. Create account
+    3. Generate API key
+  </Step>
+</Steps>
+
+### Supported Block Explorers
+
+| Chain | Explorer | API Documentation |
+|-------|----------|-------------------|
+| Ethereum | Etherscan | https://etherscan.io/apis |
+| Base | Basescan | https://basescan.org/apis |
+| Optimism | Optimistic Etherscan | https://optimistic.etherscan.io/apis |
+| Arbitrum | Arbiscan | https://arbiscan.io/apis |
+| Polygon | Polygonscan | https://polygonscan.com/apis |
+| BSC | BscScan | https://bscscan.com/apis |
+| Avalanche | Snowtrace | https://snowtrace.io/apis |
+
+## Verification Status
+
+### Check Verification Status
+
+Verify a contract was successfully verified:
+
+```bash
+# Check on Etherscan
+open "https://etherscan.io/address/0x742d35Cc6634C0532925a3b844Bc454e4438f44e#code"
+
+# Or use API
+curl "https://api.etherscan.io/api
+?module=contract
+&action=getsourcecode
+&address=0x742d35Cc6634C0532925a3b844Bc454e4438f44e
+&apikey=$ETHERSCAN_API_KEY"
+```
+
+Successfully verified contracts will show:
+- ✅ Verified contract source code
+- Compiler version
+- Optimization settings
+- Contract ABI
+- Constructor arguments
+
+### Verification Success Indicators
+
+**In Script Output**
+```
+✅ Verification succeeded for HyperProver on chain 1
+```
+
+**On Block Explorer**
+- Green checkmark next to contract
+- "Contract Source Code Verified" message
+- Readable source code tabs
+- Read/Write Contract interface available
+
+## Troubleshooting
+
+### Already Verified Error
+
+If contract is already verified:
+```
+Contract is already verified
+```
+
+This is expected for:
+- Re-running verification script
+- Contracts deployed with same bytecode
+
+**Solution**: Check block explorer to confirm verification is correct.
+
+### Invalid API Key
+
+```
+Error: Invalid API key
+```
+
+**Solutions**:
+1. Verify API key is correct in `.env` or verification keys file
+2. Check API key is for the correct network (Etherscan vs Basescan)
+3. Ensure API key is activated (check email for verification link)
+
+### Constructor Arguments Mismatch
+
+```
+Error: Invalid constructor arguments
+```
+
+**Solutions**:
+1. Extract constructor args from deployment CSV:
+   ```bash
+   grep "ContractName" out/deploy.csv | cut -d',' -f4
+   ```
+2. Verify args match deployment transaction
+3. Check ABI encoding is correct
+
+### Rate Limiting
+
+```
+Error: Rate limit exceeded
+```
+
+**Solutions**:
+1. Wait 5-10 seconds between verifications
+2. Use `--slow` flag in deployment to add delays
+3. Upgrade to premium API key for higher limits
+4. Verification script includes automatic retry with delay
+
+### Compiler Settings Mismatch
+
+```
+Error: Compiler version mismatch
+```
+
+Ensure your `foundry.toml` matches deployment:
+
+```toml foundry.toml
+[profile.default]
+solc_version="0.8.27"
+optimizer = true
+optimizer_runs = 1000000
+via_ir = true
+evm_version = "paris"
+cbor_metadata = false
+bytecode_hash = "none"
+```
+
+Forge should automatically use these settings for verification.
+
+### Verification Timeout
+
+```
+Error: Verification timeout
+```
+
+**Solutions**:
+1. Increase timeout with `--timeout 300` (5 minutes)
+2. Retry verification after a few minutes
+3. Check if block explorer is experiencing issues
+4. Use `--watch` flag to wait for completion
+
+### Contract Not Found
+
+```
+Error: Contract creation code not found
+```
+
+**Solutions**:
+1. Wait a few blocks for explorer to index the contract
+2. Verify contract address is correct
+3. Check transaction was successful
+4. Ensure contract was deployed on the correct network
+
+## Advanced Verification
+
+### Verify with Standard JSON Input
+
+For complex build configurations:
+
+```bash
+# Generate standard JSON input
+forge verify-contract \
+  --chain mainnet \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --standard-json-input \
+  0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  contracts/Portal.sol:Portal
+```
+
+### Verify via Sourcify
+
+[Sourcify](https://sourcify.dev/) provides decentralized contract verification:
+
+```bash
+# Verify on Sourcify
+forge verify-contract \
+  --verifier sourcify \
+  --chain-id 1 \
+  0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  contracts/Portal.sol:Portal
+```
+
+### Multi-Chain Verification Tracking
+
+Track verification across multiple chains:
+
+```bash
+# Create verification tracking file
+cat > verification-status.md << 'EOF'
+# Verification Status
+
+## Portal
+- [x] Ethereum (1): https://etherscan.io/address/0x742d35...
+- [x] Base (8453): https://basescan.org/address/0x742d35...
+- [x] Optimism (10): https://optimistic.etherscan.io/address/0x742d35...
+- [ ] Arbitrum (42161): Pending
+
+## HyperProver
+- [x] Ethereum (1): https://etherscan.io/address/0x8464135...
+- [x] Base (8453): https://basescan.org/address/0x8464135...
+EOF
+```
+
+## Verification Best Practices
+
+<Steps>
+  <Step title="Verify Immediately After Deployment">
+    Verify contracts as soon as deployment completes to ensure accuracy.
+  </Step>
+  <Step title="Use Automated Scripts">
+    Use `verifyRoutes.sh` for consistent, repeatable verification.
+  </Step>
+  <Step title="Keep Deployment Records">
+    Maintain deployment CSV files for verification and auditing.
+  </Step>
+  <Step title="Verify on Multiple Explorers">
+    Verify on both Etherscan-based and Sourcify for broader coverage.
+  </Step>
+  <Step title="Document Verification Links">
+    Share verification links with users and integrators.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Integration Guide" icon="plug" href="/guides/erc7683-integration">
+    Integrate verified contracts into your application
+  </Card>
+  <Card title="Testing" icon="flask" href="/guides/setup">
+    Test deployed and verified contracts
+  </Card>
+</CardGroup>

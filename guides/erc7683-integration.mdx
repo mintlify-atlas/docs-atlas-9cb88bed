@@ -1,0 +1,685 @@
+---
+title: ERC-7683 Integration
+description: Use the standard ERC-7683 cross-chain order interface with Eco Routes Protocol
+---
+
+## What is ERC-7683?
+
+[ERC-7683](https://eips.ethereum.org/EIPS/eip-7683) is a standard interface for cross-chain order protocols. It provides:
+
+- **Standardized Order Format**: Common structure for cross-chain intents
+- **Gasless Orders**: Support for meta-transactions with signatures
+- **Solver Interoperability**: Compatible with any ERC-7683 solver infrastructure
+- **Unified Tooling**: Works with existing ERC-7683 tools and services
+
+Eco Routes implements ERC-7683 through two settler contracts:
+
+- **OriginSettler** (`contracts/ERC7683/OriginSettler.sol`): Handles order creation on source chains
+- **DestinationSettler** (`contracts/ERC7683/DestinationSettler.sol`): Handles order fulfillment on destination chains
+
+## ERC-7683 Order Structures
+
+### OnchainCrossChainOrder
+
+For direct on-chain order creation:
+
+```solidity ERC7683.sol
+struct OnchainCrossChainOrder {
+    uint32 fillDeadline;      // Deadline for order fulfillment
+    bytes32 orderDataType;    // Type hash for order data
+    bytes orderData;          // Encoded OrderData struct
+}
+```
+
+### GaslessCrossChainOrder
+
+For gasless orders signed by users:
+
+```solidity ERC7683.sol
+struct GaslessCrossChainOrder {
+    address originSettler;    // Origin settler contract address
+    address user;             // User creating the order
+    uint256 nonce;            // Unique nonce for replay protection
+    uint256 originChainId;    // Source chain ID
+    uint32 openDeadline;      // Deadline to open the order
+    uint32 fillDeadline;      // Deadline to fill the order
+    bytes32 orderDataType;    // Type hash for order data
+    bytes orderData;          // Encoded OrderData struct
+}
+```
+
+### OrderData
+
+Eco-specific order data structure:
+
+```solidity ERC7683.sol
+struct OrderData {
+    uint64 destination;       // Destination chain ID
+    bytes route;              // Encoded Route struct
+    Reward reward;            // Reward structure
+    Output[] maxSpent;        // Maximum tokens user will spend
+    address routePortal;      // Portal address on destination
+    uint64 routeDeadline;     // Route execution deadline
+}
+```
+
+### ResolvedCrossChainOrder
+
+Standardized resolved order format:
+
+```solidity ERC7683.sol
+struct ResolvedCrossChainOrder {
+    address user;             // User address
+    uint256 originChainId;    // Origin chain ID
+    uint32 openDeadline;      // Open deadline timestamp
+    uint32 fillDeadline;      // Fill deadline timestamp
+    bytes32 orderId;          // Unique order identifier (intent hash)
+    Output[] maxSpent;        // Max tokens spent by user
+    Output[] minReceived;     // Min rewards for solver
+    FillInstruction[] fillInstructions;  // How to fill on destination
+}
+```
+
+## Creating Orders (Origin Chain)
+
+The `OriginSettler` contract provides two methods for creating orders.
+
+### Function Signatures
+
+From `contracts/ERC7683/OriginSettler.sol`:
+
+```solidity OriginSettler.sol
+/**
+ * @notice Opens an Eco intent directly on chain via ERC-7683 interface
+ * @dev Called by the user to create and fund an intent atomically
+ * @param order the OnchainCrossChainOrder containing embedded OrderData
+ */
+function open(OnchainCrossChainOrder calldata order) external payable;
+
+/**
+ * @notice Opens an Eco intent on behalf of a user via ERC-7683 gasless interface
+ * @dev Called by a solver to create an intent for a user using their signature
+ * @param order the GaslessCrossChainOrder containing user signature and OrderData
+ * @param signature the user's EIP-712 signature authorizing the intent creation
+ */
+function openFor(
+    GaslessCrossChainOrder calldata order,
+    bytes calldata signature,
+    bytes calldata /* originFillerData */
+) external payable;
+```
+
+### Method 1: Direct On-Chain Orders
+
+Create orders directly from your wallet:
+
+<Steps>
+  <Step title="Prepare OrderData">
+    Encode your intent into ERC-7683 format:
+
+    ```solidity
+    // Create standard Route and Reward
+    Route memory route = Route({
+        salt: keccak256(abi.encodePacked(msg.sender, block.timestamp)),
+        deadline: uint64(block.timestamp + 3600),
+        portal: destinationPortalAddress,
+        nativeAmount: 0,
+        tokens: routeTokens,
+        calls: calls
+    });
+
+    Reward memory reward = Reward({
+        deadline: uint64(block.timestamp + 3600),
+        creator: msg.sender,
+        prover: proverAddress,
+        nativeAmount: 0,
+        tokens: rewardTokens
+    });
+
+    // Create OrderData
+    OrderData memory orderData = OrderData({
+        destination: destinationChainId,
+        route: abi.encode(route),
+        reward: reward,
+        maxSpent: createMaxSpent(reward),  // From rewards
+        routePortal: destinationPortalAddress,
+        routeDeadline: route.deadline
+    });
+    ```
+  </Step>
+
+  <Step title="Create OnchainCrossChainOrder">
+    Wrap OrderData in the ERC-7683 order structure:
+
+    ```solidity
+    OnchainCrossChainOrder memory order = OnchainCrossChainOrder({
+        fillDeadline: uint32(block.timestamp + 3600),
+        orderDataType: ORDER_DATA_TYPEHASH,
+        orderData: abi.encode(orderData)
+    });
+    ```
+  </Step>
+
+  <Step title="Approve Tokens and Open Order">
+    Approve reward tokens and call `open()`:
+
+    ```solidity
+    // Approve tokens
+    for (uint256 i = 0; i < reward.tokens.length; i++) {
+        IERC20(reward.tokens[i].token).approve(
+            address(portal),
+            reward.tokens[i].amount
+        );
+    }
+
+    // Open order
+    portal.open{value: reward.nativeAmount}(order);
+
+    // Order is now published and funded!
+    ```
+  </Step>
+</Steps>
+
+### Method 2: Gasless Orders with Signatures
+
+Allow solvers to create orders on behalf of users:
+
+<Tabs>
+  <Tab title="User: Sign Order">
+    Users create and sign orders off-chain:
+
+    ```javascript
+    // Create order data
+    const orderData = {
+        destination: destinationChainId,
+        route: encodeRoute(route),
+        reward: reward,
+        maxSpent: calculateMaxSpent(reward),
+        routePortal: destinationPortalAddress,
+        routeDeadline: route.deadline
+    };
+
+    // Create gasless order
+    const order = {
+        originSettler: portalAddress,
+        user: userAddress,
+        nonce: Date.now(),
+        originChainId: sourceChainId,
+        openDeadline: Math.floor(Date.now() / 1000) + 3600,
+        fillDeadline: Math.floor(Date.now() / 1000) + 7200,
+        orderDataType: ORDER_DATA_TYPEHASH,
+        orderData: ethers.utils.defaultAbiCoder.encode(
+            ["tuple(uint64,bytes,tuple(...),tuple(...)[],...)"],
+            [orderData]
+        )
+    };
+
+    // Sign with EIP-712
+    const domain = {
+        name: "EcoPortal",
+        version: "1",
+        chainId: sourceChainId,
+        verifyingContract: portalAddress
+    };
+
+    const types = {
+        GaslessCrossChainOrder: [
+            { name: "originSettler", type: "address" },
+            { name: "user", type: "address" },
+            { name: "nonce", type: "uint256" },
+            { name: "originChainId", type: "uint256" },
+            { name: "openDeadline", type: "uint32" },
+            { name: "fillDeadline", type: "uint32" },
+            { name: "orderDataType", type: "bytes32" },
+            { name: "orderDataHash", type: "bytes32" }
+        ]
+    };
+
+    const signature = await signer._signTypedData(domain, types, {
+        ...order,
+        orderDataHash: ethers.utils.keccak256(order.orderData)
+    });
+
+    // Broadcast order + signature to solvers
+    await broadcastGaslessOrder(order, signature);
+    ```
+  </Tab>
+
+  <Tab title="Solver: Execute Order">
+    Solvers submit signed orders on-chain:
+
+    ```solidity
+    // Solver receives order + signature from user
+    function executeGaslessOrder(
+        GaslessCrossChainOrder calldata order,
+        bytes calldata signature
+    ) external {
+        // Verify order is profitable
+        require(isProfitable(order), "Not profitable");
+
+        // Submit order on behalf of user
+        // No originFillerData needed for Eco Routes
+        portal.openFor(order, signature, "");
+
+        // Order is now created and funded from user's tokens
+        // (user must have approved portal beforehand or
+        //  funded the vault directly)
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Filling Orders (Destination Chain)
+
+The `DestinationSettler` contract handles order fulfillment.
+
+### Function Signature
+
+From `contracts/ERC7683/DestinationSettler.sol`:
+
+```solidity DestinationSettler.sol
+/**
+ * @notice Fills a single leg of a particular order on the destination chain
+ * @param orderId Unique identifier for the order being filled (intent hash)
+ * @param originData Data emitted on the origin chain (route + rewardHash)
+ * @param fillerData Data provided by the filler (prover, source, claimant, proverData)
+ */
+function fill(
+    bytes32 orderId,
+    bytes calldata originData,
+    bytes calldata fillerData
+) external payable;
+```
+
+### Fulfilling an Order
+
+<Steps>
+  <Step title="Monitor Orders">
+    Listen for `Open` events on origin chains:
+
+    ```javascript
+    const filter = portal.filters.Open();
+
+    portal.on(filter, async (orderId, resolvedOrder) => {
+        // Check if order is for your destination chain
+        const fillInstruction = resolvedOrder.fillInstructions[0];
+        if (fillInstruction.destinationChainId === myChainId) {
+            await evaluateAndFill(orderId, fillInstruction);
+        }
+    });
+    ```
+  </Step>
+
+  <Step title="Prepare Fill Data">
+    Encode the required data for filling:
+
+    ```solidity
+    // originData comes from the Open event's fillInstructions
+    // It contains: abi.encode(route, rewardHash)
+    bytes memory originData = fillInstruction.originData;
+
+    // fillerData: (prover, source, claimant, proverData)
+    bytes memory fillerData = abi.encode(
+        proverAddress,           // Prover on destination chain
+        sourceChainDomainID,     // Bridge domain ID for source
+        bytes32(uint256(uint160(msg.sender))),  // Your address as claimant
+        proverSpecificData       // Bridge-specific parameters
+    );
+    ```
+  </Step>
+
+  <Step title="Execute Fill">
+    Call the `fill` function:
+
+    ```solidity
+    // Approve tokens for portal
+    for (uint256 i = 0; i < route.tokens.length; i++) {
+        IERC20(route.tokens[i].token).approve(
+            address(portal),
+            route.tokens[i].amount
+        );
+    }
+
+    // Fill the order
+    portal.fill{value: totalValue}(
+        orderId,        // Intent hash from Open event
+        originData,     // Route + rewardHash
+        fillerData      // Prover parameters + claimant
+    );
+    ```
+
+    This internally calls `fulfillAndProve()` to execute and initiate proving.
+  </Step>
+</Steps>
+
+## Resolving Orders
+
+Get standardized order information:
+
+```solidity OriginSettler.sol
+/**
+ * @notice Resolves an OnchainCrossChainOrder to a ResolvedCrossChainOrder
+ * @param order the OnchainCrossChainOrder to be resolved
+ */
+function resolve(
+    OnchainCrossChainOrder calldata order
+) public view returns (ResolvedCrossChainOrder memory);
+
+/**
+ * @notice Resolves GaslessCrossChainOrder to a ResolvedCrossChainOrder
+ * @param order the GaslessCrossChainOrder to be resolved
+ */
+function resolveFor(
+    GaslessCrossChainOrder calldata order,
+    bytes calldata // originFillerData (not used)
+) public view returns (ResolvedCrossChainOrder memory);
+```
+
+Usage:
+
+```solidity
+// Resolve on-chain order
+ResolvedCrossChainOrder memory resolved = portal.resolve(order);
+
+// Access standardized fields
+address user = resolved.user;
+bytes32 orderId = resolved.orderId;  // This is the intent hash
+Output[] memory rewards = resolved.minReceived;
+FillInstruction memory fillInst = resolved.fillInstructions[0];
+```
+
+## Complete ERC-7683 Example
+
+Here's a complete example using the ERC-7683 interface:
+
+<Tabs>
+  <Tab title="Create Order">
+    ```solidity
+    pragma solidity ^0.8.26;
+
+    import {IOriginSettler} from "./interfaces/ERC7683/IOriginSettler.sol";
+    import {OnchainCrossChainOrder, OrderData, Output} from "./types/ERC7683.sol";
+    import {Route, Reward, TokenAmount, Call} from "./types/Intent.sol";
+
+    contract ERC7683OrderCreator {
+        IOriginSettler public portal;
+        bytes32 public constant ORDER_DATA_TYPEHASH = keccak256(
+            "OrderData(uint64 destination,bytes route,Reward reward,Output[] maxSpent,address routePortal,uint64 routeDeadline)"
+        );
+
+        constructor(address _portal) {
+            portal = IOriginSettler(_portal);
+        }
+
+        function createTokenTransferOrder(
+            uint64 destinationChainId,
+            address destinationPortal,
+            address tokenToSend,
+            uint256 amountToSend,
+            address recipient,
+            address rewardToken,
+            uint256 rewardAmount,
+            address prover
+        ) external payable {
+            // 1. Create the call to transfer tokens
+            Call[] memory calls = new Call[](1);
+            calls[0] = Call({
+                target: tokenToSend,
+                data: abi.encodeWithSignature(
+                    "transfer(address,uint256)",
+                    recipient,
+                    amountToSend
+                ),
+                value: 0
+            });
+
+            // 2. Create route
+            TokenAmount[] memory routeTokens = new TokenAmount[](1);
+            routeTokens[0] = TokenAmount(tokenToSend, amountToSend);
+
+            Route memory route = Route({
+                salt: keccak256(abi.encodePacked(msg.sender, block.timestamp)),
+                deadline: uint64(block.timestamp + 3600),
+                portal: destinationPortal,
+                nativeAmount: 0,
+                tokens: routeTokens,
+                calls: calls
+            });
+
+            // 3. Create reward
+            TokenAmount[] memory rewardTokens = new TokenAmount[](1);
+            rewardTokens[0] = TokenAmount(rewardToken, rewardAmount);
+
+            Reward memory reward = Reward({
+                deadline: uint64(block.timestamp + 3600),
+                creator: msg.sender,
+                prover: prover,
+                nativeAmount: 0,
+                tokens: rewardTokens
+            });
+
+            // 4. Create maxSpent (same as reward for simple orders)
+            Output[] memory maxSpent = new Output[](1);
+            maxSpent[0] = Output({
+                token: bytes32(uint256(uint160(rewardToken))),
+                amount: rewardAmount,
+                recipient: bytes32(0),
+                chainId: block.chainid
+            });
+
+            // 5. Create OrderData
+            OrderData memory orderData = OrderData({
+                destination: destinationChainId,
+                route: abi.encode(route),
+                reward: reward,
+                maxSpent: maxSpent,
+                routePortal: destinationPortal,
+                routeDeadline: route.deadline
+            });
+
+            // 6. Create OnchainCrossChainOrder
+            OnchainCrossChainOrder memory order = OnchainCrossChainOrder({
+                fillDeadline: uint32(block.timestamp + 3600),
+                orderDataType: ORDER_DATA_TYPEHASH,
+                orderData: abi.encode(orderData)
+            });
+
+            // 7. Approve and open
+            IERC20(rewardToken).approve(address(portal), rewardAmount);
+            portal.open(order);
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="Fill Order">
+    ```solidity
+    pragma solidity ^0.8.26;
+
+    import {IDestinationSettler} from "./interfaces/ERC7683/IDestinationSettler.sol";
+    import {Route} from "./types/Intent.sol";
+
+    contract ERC7683OrderFiller {
+        IDestinationSettler public portal;
+
+        constructor(address _portal) {
+            portal = IDestinationSettler(_portal);
+        }
+
+        function fillOrder(
+            bytes32 orderId,
+            bytes calldata originData,  // From Open event
+            address prover,
+            uint64 sourceChainDomainID,
+            bytes calldata proverData
+        ) external payable {
+            // Decode originData to get route
+            (bytes memory encodedRoute, bytes32 rewardHash) = abi.decode(
+                originData,
+                (bytes, bytes32)
+            );
+            Route memory route = abi.decode(encodedRoute, (Route));
+
+            // Approve tokens
+            for (uint256 i = 0; i < route.tokens.length; i++) {
+                IERC20(route.tokens[i].token).approve(
+                    address(portal),
+                    route.tokens[i].amount
+                );
+            }
+
+            // Encode fillerData
+            bytes32 claimant = bytes32(uint256(uint160(address(this))));
+            bytes memory fillerData = abi.encode(
+                prover,
+                sourceChainDomainID,
+                claimant,
+                proverData
+            );
+
+            // Fill the order
+            portal.fill{value: msg.value}(
+                orderId,
+                originData,
+                fillerData
+            );
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## ERC-7683 Events
+
+### Origin Chain Events
+
+```solidity
+// Emitted when an order is opened
+event Open(
+    bytes32 indexed orderId,
+    ResolvedCrossChainOrder resolvedOrder
+);
+```
+
+Listen for orders:
+
+```javascript
+portal.on("Open", (orderId, resolvedOrder) => {
+    console.log("New order:", orderId);
+    console.log("User:", resolvedOrder.user);
+    console.log("Rewards:", resolvedOrder.minReceived);
+    console.log("Destination:", resolvedOrder.fillInstructions[0].destinationChainId);
+});
+```
+
+### Destination Chain Events
+
+```solidity
+// Emitted when an order is filled
+event OrderFilled(
+    bytes32 indexed orderId,
+    address indexed filler
+);
+```
+
+Track fills:
+
+```javascript
+portal.on("OrderFilled", (orderId, filler) => {
+    console.log("Order filled:", orderId);
+    console.log("Filled by:", filler);
+});
+```
+
+## Comparing Native vs ERC-7683 Interfaces
+
+<Tabs>
+  <Tab title="Native Interface">
+    Direct Eco Routes interface:
+
+    ```solidity
+    // Create intent
+    Intent memory intent = Intent({
+        destination: destChainId,
+        route: route,
+        reward: reward
+    });
+
+    // Publish and fund
+    portal.publishAndFund(intent, false);
+
+    // Fulfill
+    portal.fulfill(intentHash, route, rewardHash, claimant);
+    ```
+
+    **Pros:**
+    - Simpler structure
+    - Direct access to all features
+    - More efficient (less encoding)
+
+    **Cons:**
+    - Not compatible with ERC-7683 tooling
+    - Custom implementation for each protocol
+  </Tab>
+
+  <Tab title="ERC-7683 Interface">
+    Standardized interface:
+
+    ```solidity
+    // Create order
+    OnchainCrossChainOrder memory order = OnchainCrossChainOrder({
+        fillDeadline: deadline,
+        orderDataType: ORDER_DATA_TYPEHASH,
+        orderData: abi.encode(orderData)
+    });
+
+    // Open
+    portal.open(order);
+
+    // Fill
+    portal.fill(orderId, originData, fillerData);
+    ```
+
+    **Pros:**
+    - Standard interface across protocols
+    - Compatible with existing ERC-7683 infrastructure
+    - Ecosystem interoperability
+    - Gasless order support
+
+    **Cons:**
+    - Additional encoding/decoding
+    - More complex structure
+  </Tab>
+</Tabs>
+
+## Best Practices
+
+<Tip>
+  **Use ERC-7683 for Interoperability**: If you want your orders to be visible to all ERC-7683 solvers and tools, use the standardized interface.
+</Tip>
+
+<Tip>
+  **Use Native Interface for Integration**: If you're building a custom integration and want maximum control and efficiency, use the native Eco Routes interface.
+</Tip>
+
+<Warning>
+  **Signature Security**: When using gasless orders, ensure users understand what they're signing. Always display human-readable order details.
+</Warning>
+
+<Note>
+  **Nonce Management**: For gasless orders, track nonces carefully to prevent replay attacks. Use timestamps or incrementing counters.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Creating Intents" icon="pen" href="/guides/creating-intents">
+    Learn about the native intent creation interface
+  </Card>
+  <Card title="Fulfilling Intents" icon="check" href="/guides/fulfilling-intents">
+    Understand native intent fulfillment
+  </Card>
+  <Card title="Proving Intents" icon="shield" href="/guides/proving-intents">
+    Learn about cross-chain proof mechanisms
+  </Card>
+</CardGroup>

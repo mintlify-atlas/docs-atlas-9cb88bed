@@ -1,0 +1,802 @@
+---
+title: "IntentSource"
+description: "Contract for managing cross-chain intents and rewards on the source chain"
+---
+
+## Overview
+
+IntentSource is an abstract contract containing all core intent functionality for EVM chains. It manages the lifecycle of cross-chain intents and their associated rewards on the source chain.
+
+**Contract Location:** `contracts/IntentSource.sol`
+
+**Inherits:** OriginSettler, IIntentSource
+
+## State Variables
+
+### Status Enum
+
+```solidity
+enum Status {
+    Initial,
+    Funded,
+    Withdrawn,
+    Refunded
+}
+```
+
+Tracks the lifecycle status of each intent's rewards.
+
+## View Functions
+
+### getRewardStatus
+
+```solidity
+function getRewardStatus(bytes32 intentHash) public view returns (Status status)
+```
+
+Retrieves reward status for a given intent hash.
+
+<ParamField path="intentHash" type="bytes32">
+  Hash of the intent to query
+</ParamField>
+
+<ResponseField name="status" type="Status">
+  Current status of the intent (Initial, Funded, Withdrawn, or Refunded)
+</ResponseField>
+
+---
+
+### getIntentHash (Intent)
+
+```solidity
+function getIntentHash(
+    Intent memory intent
+) public pure returns (
+    bytes32 intentHash,
+    bytes32 routeHash,
+    bytes32 rewardHash
+)
+```
+
+Calculates the hash of an intent and its components.
+
+<ParamField path="intent" type="Intent">
+  The intent to hash
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Combined hash of route and reward
+</ResponseField>
+
+<ResponseField name="routeHash" type="bytes32">
+  Hash of the route component
+</ResponseField>
+
+<ResponseField name="rewardHash" type="bytes32">
+  Hash of the reward component
+</ResponseField>
+
+---
+
+### getIntentHash (Destination, Route, Reward)
+
+```solidity
+function getIntentHash(
+    uint64 destination,
+    bytes memory route,
+    Reward memory reward
+) public pure returns (
+    bytes32 intentHash,
+    bytes32 routeHash,
+    bytes32 rewardHash
+)
+```
+
+Calculates the hash of an intent and its components using encoded route data.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="route" type="bytes">
+  Encoded route data for the intent as bytes for cross-VM compatibility
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure containing distribution details
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Combined hash of route and reward
+</ResponseField>
+
+<ResponseField name="routeHash" type="bytes32">
+  Hash of the route component
+</ResponseField>
+
+<ResponseField name="rewardHash" type="bytes32">
+  Hash of the reward component
+</ResponseField>
+
+---
+
+### getIntentHash (Route Hash)
+
+```solidity
+function getIntentHash(
+    uint64 destination,
+    bytes32 _routeHash,
+    Reward memory reward
+) public pure returns (
+    bytes32 intentHash,
+    bytes32 routeHash,
+    bytes32 rewardHash
+)
+```
+
+Calculates intent hash from pre-computed route hash and reward components.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="_routeHash" type="bytes32">
+  Pre-computed hash of the route component
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure containing distribution details
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Combined hash of route and reward
+</ResponseField>
+
+<ResponseField name="routeHash" type="bytes32">
+  Hash of the route component (passed through)
+</ResponseField>
+
+<ResponseField name="rewardHash" type="bytes32">
+  Hash of the reward component
+</ResponseField>
+
+---
+
+### intentVaultAddress (Intent)
+
+```solidity
+function intentVaultAddress(Intent calldata intent) public view returns (address)
+```
+
+Calculates the deterministic address of the intent vault.
+
+<ParamField path="intent" type="Intent">
+  Intent to calculate vault address for
+</ParamField>
+
+<ResponseField name="address" type="address">
+  Address of the intent vault
+</ResponseField>
+
+---
+
+### intentVaultAddress (Destination, Route, Reward)
+
+```solidity
+function intentVaultAddress(
+    uint64 destination,
+    bytes memory route,
+    Reward calldata reward
+) public view returns (address)
+```
+
+Calculates the deterministic address of the intent vault using universal format.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="route" type="bytes">
+  Encoded route data for the intent as bytes
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  The reward structure containing distribution details
+</ParamField>
+
+<ResponseField name="address" type="address">
+  Address of the intent vault
+</ResponseField>
+
+---
+
+### isIntentFunded (Intent)
+
+```solidity
+function isIntentFunded(Intent calldata intent) public view returns (bool)
+```
+
+Checks if an intent is completely funded.
+
+<ParamField path="intent" type="Intent">
+  Intent to validate
+</ParamField>
+
+<ResponseField name="bool" type="bool">
+  True if intent is completely funded, false otherwise
+</ResponseField>
+
+---
+
+### isIntentFunded (Destination, Route, Reward)
+
+```solidity
+function isIntentFunded(
+    uint64 destination,
+    bytes memory route,
+    Reward calldata reward
+) public view returns (bool)
+```
+
+Checks if an intent is fully funded using universal format.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="route" type="bytes">
+  Encoded route data for the intent as bytes
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  The reward structure containing distribution details
+</ParamField>
+
+<ResponseField name="bool" type="bool">
+  True if intent is completely funded, false otherwise
+</ResponseField>
+
+## State-Changing Functions
+
+### publish (Intent)
+
+```solidity
+function publish(
+    Intent calldata intent
+) public returns (
+    bytes32 intentHash,
+    address vault
+)
+```
+
+Creates an intent without funding.
+
+<ParamField path="intent" type="Intent">
+  The complete intent struct to be published
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Hash of the created intent
+</ResponseField>
+
+<ResponseField name="vault" type="address">
+  Address of the created vault
+</ResponseField>
+
+---
+
+### publish (Destination, Route, Reward)
+
+```solidity
+function publish(
+    uint64 destination,
+    bytes memory route,
+    Reward memory reward
+) public returns (
+    bytes32 intentHash,
+    address vault
+)
+```
+
+Creates an intent without funding using universal format.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="route" type="bytes">
+  Encoded route data for the intent as bytes
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  The reward structure containing distribution details
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Hash of the created intent
+</ResponseField>
+
+<ResponseField name="vault" type="address">
+  Address of the created vault
+</ResponseField>
+
+---
+
+### publishAndFund (Intent)
+
+```solidity
+function publishAndFund(
+    Intent calldata intent,
+    bool allowPartial
+) public payable returns (
+    bytes32 intentHash,
+    address vault
+)
+```
+
+Creates and funds an intent in a single transaction.
+
+<ParamField path="intent" type="Intent">
+  The complete intent struct to be published and funded
+</ParamField>
+
+<ParamField path="allowPartial" type="bool">
+  Whether to allow partial funding
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Hash of the created and funded intent
+</ResponseField>
+
+<ResponseField name="vault" type="address">
+  Address of the created vault
+</ResponseField>
+
+<Note>
+This function is payable to accept native token (ETH) for funding.
+</Note>
+
+---
+
+### publishAndFund (Destination, Route, Reward)
+
+```solidity
+function publishAndFund(
+    uint64 destination,
+    bytes memory route,
+    Reward calldata reward,
+    bool allowPartial
+) public payable returns (
+    bytes32 intentHash,
+    address vault
+)
+```
+
+Creates and funds an intent in a single transaction using universal format.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="route" type="bytes">
+  Encoded route data for the intent as bytes
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  The reward structure containing distribution details
+</ParamField>
+
+<ParamField path="allowPartial" type="bool">
+  Whether to allow partial funding
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Hash of the created and funded intent
+</ResponseField>
+
+<ResponseField name="vault" type="address">
+  Address of the created vault
+</ResponseField>
+
+---
+
+### fund
+
+```solidity
+function fund(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward,
+    bool allowPartial
+) external payable returns (bytes32 intentHash)
+```
+
+Funds an existing intent.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="routeHash" type="bytes32">
+  Hash of the route component
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure containing distribution details
+</ParamField>
+
+<ParamField path="allowPartial" type="bool">
+  Whether to allow partial funding
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Hash of the funded intent
+</ResponseField>
+
+<Note>
+Prevents funding of intents that are already withdrawn or refunded. Allows funding of Initial or Funded status intents for partial funding.
+</Note>
+
+---
+
+### fundFor
+
+```solidity
+function fundFor(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward,
+    bool allowPartial,
+    address funder,
+    address permitContract
+) external payable returns (bytes32 intentHash)
+```
+
+Funds an intent for a user with permit/allowance.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="routeHash" type="bytes32">
+  Hash of the route component
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure containing distribution details
+</ParamField>
+
+<ParamField path="allowPartial" type="bool">
+  Whether to allow partial funding
+</ParamField>
+
+<ParamField path="funder" type="address">
+  Address to fund the intent from
+</ParamField>
+
+<ParamField path="permitContract" type="address">
+  Address of the permitContract instance
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Hash of the funded intent
+</ResponseField>
+
+---
+
+### publishAndFundFor (Intent)
+
+```solidity
+function publishAndFundFor(
+    Intent calldata intent,
+    bool allowPartial,
+    address funder,
+    address permitContract
+) public payable returns (
+    bytes32 intentHash,
+    address vault
+)
+```
+
+Creates and funds an intent using permit/allowance.
+
+<ParamField path="intent" type="Intent">
+  The complete intent struct
+</ParamField>
+
+<ParamField path="allowPartial" type="bool">
+  Whether to allow partial funding
+</ParamField>
+
+<ParamField path="funder" type="address">
+  Address to fund the intent from
+</ParamField>
+
+<ParamField path="permitContract" type="address">
+  Address of the permitContract instance
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Hash of the created and funded intent
+</ResponseField>
+
+<ResponseField name="vault" type="address">
+  Address of the created vault
+</ResponseField>
+
+---
+
+### publishAndFundFor (Destination, Route, Reward)
+
+```solidity
+function publishAndFundFor(
+    uint64 destination,
+    bytes memory route,
+    Reward calldata reward,
+    bool allowPartial,
+    address funder,
+    address permitContract
+) public payable returns (
+    bytes32 intentHash,
+    address vault
+)
+```
+
+Creates and funds an intent on behalf of another address using universal format.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="route" type="bytes">
+  Encoded route data for the intent as bytes
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  The reward structure containing distribution details
+</ParamField>
+
+<ParamField path="allowPartial" type="bool">
+  Whether to accept partial funding
+</ParamField>
+
+<ParamField path="funder" type="address">
+  The address providing the funding
+</ParamField>
+
+<ParamField path="permitContract" type="address">
+  The permit contract for token approvals
+</ParamField>
+
+<ResponseField name="intentHash" type="bytes32">
+  Hash of the created and funded intent
+</ResponseField>
+
+<ResponseField name="vault" type="address">
+  Address of the created vault
+</ResponseField>
+
+---
+
+### withdraw
+
+```solidity
+function withdraw(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward
+) public
+```
+
+Withdraws rewards associated with an intent to its claimant.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="routeHash" type="bytes32">
+  Hash of the intent's route
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure of the intent
+</ParamField>
+
+<Note>
+If the intent has been proven on a different chain, this function will challenge the proof instead of withdrawing.
+</Note>
+
+---
+
+### batchWithdraw
+
+```solidity
+function batchWithdraw(
+    uint64[] calldata destinations,
+    bytes32[] calldata routeHashes,
+    Reward[] calldata rewards
+) external
+```
+
+Batch withdraws multiple intents.
+
+<ParamField path="destinations" type="uint64[]">
+  Array of destination chain IDs for the intents
+</ParamField>
+
+<ParamField path="routeHashes" type="bytes32[]">
+  Array of route hashes for the intents
+</ParamField>
+
+<ParamField path="rewards" type="Reward[]">
+  Array of reward structures for the intents
+</ParamField>
+
+<Note>
+All arrays must have the same length, or the function will revert with ArrayLengthMismatch.
+</Note>
+
+---
+
+### refund
+
+```solidity
+function refund(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward
+) external
+```
+
+Refunds rewards to the intent creator.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="routeHash" type="bytes32">
+  Hash of the intent's route
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure of the intent
+</ParamField>
+
+<Note>
+Can only be called after the reward deadline has passed, and only if the intent has not been proven/claimed.
+</Note>
+
+---
+
+### refundTo
+
+```solidity
+function refundTo(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward,
+    address refundee
+) external
+```
+
+Refunds rewards to a specified address (only callable by reward creator).
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="routeHash" type="bytes32">
+  Hash of the intent's route
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure of the intent
+</ParamField>
+
+<ParamField path="refundee" type="address">
+  Address to receive the refunded rewards
+</ParamField>
+
+<Note>
+Only the reward creator (reward.creator) can call this function.
+</Note>
+
+---
+
+### recoverToken
+
+```solidity
+function recoverToken(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward,
+    address token
+) external
+```
+
+Recover tokens that were sent to the intent vault by mistake.
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent
+</ParamField>
+
+<ParamField path="routeHash" type="bytes32">
+  Hash of the intent's route
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure of the intent
+</ParamField>
+
+<ParamField path="token" type="address">
+  Token address for handling incorrect vault transfers
+</ParamField>
+
+<Note>
+The token must not be among the intent's reward tokens. This function is for recovering tokens sent to the vault by mistake.
+</Note>
+
+## Events
+
+### IntentPublished
+
+```solidity
+event IntentPublished(
+    bytes32 indexed intentHash,
+    uint64 indexed destination,
+    bytes route,
+    address creator,
+    address prover,
+    uint64 deadline,
+    uint256 nativeAmount,
+    TokenAmount[] tokens
+)
+```
+
+Emitted when a new intent is published.
+
+### IntentFunded
+
+```solidity
+event IntentFunded(
+    bytes32 indexed intentHash,
+    address indexed funder,
+    bool fullyFunded
+)
+```
+
+Emitted when an intent is funded (fully or partially).
+
+### IntentWithdrawn
+
+```solidity
+event IntentWithdrawn(
+    bytes32 indexed intentHash,
+    address indexed claimant
+)
+```
+
+Emitted when rewards are withdrawn to a claimant.
+
+### IntentRefunded
+
+```solidity
+event IntentRefunded(
+    bytes32 indexed intentHash,
+    address indexed refundee
+)
+```
+
+Emitted when rewards are refunded.
+
+### IntentTokenRecovered
+
+```solidity
+event IntentTokenRecovered(
+    bytes32 indexed intentHash,
+    address indexed creator,
+    address token
+)
+```
+
+Emitted when tokens are recovered from a vault.

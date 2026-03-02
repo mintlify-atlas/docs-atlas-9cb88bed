@@ -1,0 +1,282 @@
+---
+title: Setup & Installation
+description: Get started with Eco Routes Protocol - prerequisites, installation, and project configuration
+---
+
+## Prerequisites
+
+Before you begin working with Eco Routes Protocol, ensure you have the required tools installed.
+
+<Steps>
+  <Step title="Install Node.js">
+    Install Node Version Manager (nvm) and Node.js v18.20.3:
+
+    ```bash
+    # Install nvm (Node Version Manager)
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+
+    # Install and use Node.js v18.20.3
+    nvm install v18.20.3
+    nvm use v18.20.3
+    ```
+
+    Verify the installation:
+
+    ```bash
+    node --version
+    # Should output: v18.20.3
+    ```
+  </Step>
+
+  <Step title="Install Package Manager">
+    Install Yarn package manager:
+
+    <CodeGroup>
+    ```bash npm
+    npm install -g yarn@1.22.19
+    ```
+
+    ```bash pnpm
+    pnpm add -g yarn@1.22.19
+    ```
+    </CodeGroup>
+
+    Verify the installation:
+
+    ```bash
+    yarn --version
+    # Should output: 1.22.19
+    ```
+  </Step>
+
+  <Step title="Install Development Tools">
+    Install Foundry for smart contract development (recommended):
+
+    ```bash
+    # Install Foundry
+    curl -L https://foundry.paradigm.xyz | bash
+
+    # Update to latest version
+    foundryup
+    ```
+
+    Alternatively, you can use Hardhat:
+
+    ```bash
+    npm install -g hardhat
+    ```
+
+    <Note>
+      Foundry is recommended for the best development experience with Eco Routes, but Hardhat is also fully supported.
+    </Note>
+  </Step>
+</Steps>
+
+## Project Setup
+
+Once you have the prerequisites installed, set up the Eco Routes Protocol project.
+
+<Steps>
+  <Step title="Clone the Repository">
+    Clone the Eco Routes repository and navigate to the project directory:
+
+    ```bash
+    git clone https://github.com/eco/eco-routes.git
+    cd eco-routes
+    ```
+  </Step>
+
+  <Step title="Install Dependencies">
+    Install all project dependencies using Yarn:
+
+    <CodeGroup>
+    ```bash yarn
+    yarn install
+    ```
+
+    ```bash npm
+    npm install
+    ```
+
+    ```bash pnpm
+    pnpm install
+    ```
+    </CodeGroup>
+
+    This will install all required packages including OpenZeppelin contracts, Hyperlane libraries, and testing frameworks.
+  </Step>
+
+  <Step title="Build the Project">
+    Compile all smart contracts:
+
+    <CodeGroup>
+    ```bash yarn
+    yarn build
+    ```
+
+    ```bash foundry
+    forge build
+    ```
+
+    ```bash hardhat
+    npx hardhat compile
+    ```
+    </CodeGroup>
+
+    A successful build indicates your environment is properly configured.
+  </Step>
+
+  <Step title="Run Tests">
+    Verify everything is working by running the test suite:
+
+    <CodeGroup>
+    ```bash yarn
+    yarn test
+    ```
+
+    ```bash foundry
+    forge test
+    ```
+
+    ```bash foundry (verbose)
+    forge test -vvv
+    ```
+    </CodeGroup>
+
+    All tests should pass, confirming your setup is complete.
+  </Step>
+</Steps>
+
+## Environment Configuration
+
+For deployment and testing on live networks, configure your environment variables.
+
+<Steps>
+  <Step title="Create .env File">
+    Copy the example environment file:
+
+    ```bash
+    cp .env.example .env
+    ```
+  </Step>
+
+  <Step title="Configure RPC Endpoints">
+    Add your RPC endpoints to the `.env` file:
+
+    ```bash .env
+    # RPC endpoints
+    MAINNET_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+    TESTNET_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
+    ```
+
+    <Warning>
+      Never commit your `.env` file to version control. It's already included in `.gitignore`.
+    </Warning>
+  </Step>
+
+  <Step title="Add Private Keys">
+    Add your deployer private key for contract deployment:
+
+    ```bash .env
+    # Private keys (without 0x prefix)
+    DEPLOYER_PRIVATE_KEY=your_private_key_here
+    ```
+
+    <Warning>
+      Use a dedicated deployment wallet. Never use your main wallet's private key.
+    </Warning>
+  </Step>
+
+  <Step title="Add API Keys for Verification">
+    Add Etherscan API keys for contract verification:
+
+    ```bash .env
+    # Etherscan API keys for verification
+    ETHERSCAN_API_KEY=your_etherscan_api_key
+    ```
+  </Step>
+</Steps>
+
+## Development Commands
+
+Common commands for working with Eco Routes Protocol.
+
+### Building
+
+```bash
+# Build all contracts
+yarn build
+
+# Build with Foundry
+forge build
+
+# Build with Hardhat
+npx hardhat compile
+```
+
+### Testing
+
+```bash
+# Run all tests
+yarn test
+
+# Run Foundry tests
+forge test
+
+# Run with coverage
+yarn coverage
+
+# Run specific test file
+forge test --match-contract IntentSourceTest
+
+# Run with detailed output
+forge test -vvv
+
+# Run specific test function
+forge test --match-test testPublishAndFund
+```
+
+### Code Quality
+
+```bash
+# Format code
+yarn format
+
+# Run linting
+yarn lint
+
+# Run all quality checks
+yarn lint && yarn test
+```
+
+## Local Development
+
+For local testing and development, you can deploy contracts to a local chain.
+
+```bash
+# Start local development chain (in a separate terminal)
+anvil
+
+# Deploy contracts locally
+forge script script/Deploy.s.sol --broadcast --rpc-url localhost
+
+# Run tests against deployed contracts
+forge test --rpc-url localhost
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Creating Intents" icon="pen" href="/guides/creating-intents">
+    Learn how to create and publish cross-chain intents
+  </Card>
+  <Card title="Fulfilling Intents" icon="check" href="/guides/fulfilling-intents">
+    Become a solver and fulfill intents for rewards
+  </Card>
+  <Card title="ERC-7683 Integration" icon="plug" href="/guides/erc7683-integration">
+    Use the standard ERC-7683 interface
+  </Card>
+  <Card title="Proving Intents" icon="shield" href="/guides/proving-intents">
+    Understand cross-chain proof validation
+  </Card>
+</CardGroup>

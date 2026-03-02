@@ -1,0 +1,460 @@
+---
+title: 'Reward'
+description: 'Reward and validation parameters for cross-chain intent execution'
+---
+
+## Overview
+
+The `Reward` struct defines the incentive structure and validation parameters for cross-chain intents. It specifies who can execute the intent, what rewards they receive upon successful execution, and the execution deadline.
+
+**Type Location:** `contracts/types/Intent.sol`
+
+---
+
+## Reward
+
+```solidity
+struct Reward {
+    uint64 deadline;
+    address creator;
+    address prover;
+    uint256 nativeAmount;
+    TokenAmount[] tokens;
+}
+```
+
+Defines the reward and validation parameters for cross-chain execution.
+
+### Fields
+
+<ParamField path="deadline" type="uint64">
+  Timestamp after which the intent can no longer be executed.
+
+  **Format:** Unix timestamp (seconds since epoch)
+
+  **Purpose:**
+  - Prevents stale intents from being executed
+  - Protects users from unfavorable market conditions
+  - Allows intent creators to withdraw funds after expiration
+
+  **Validation:**
+  - Must be greater than current `block.timestamp` when intent is created
+  - Should be greater than `route.deadline` to allow time for proof submission and reward claiming
+  - Typical range: 30 minutes to 48 hours from intent creation
+
+  **Example:**
+  ```solidity
+  uint64 deadline = uint64(block.timestamp + 2 hours);
+  ```
+
+  **Relationship with Route Deadline:**
+  ```solidity
+  // Route executed on destination chain by this time
+  route.deadline = uint64(block.timestamp + 1 hours);
+  
+  // Proof must reach origin chain and rewards claimed by this time
+  reward.deadline = uint64(block.timestamp + 2 hours);
+  
+  // reward.deadline > route.deadline is recommended
+  ```
+
+  **Note:** Using `uint64` is safe until the year 2262.
+</ParamField>
+
+<ParamField path="creator" type="address">
+  Address that created the intent and has authority to modify or cancel it.
+
+  **Permissions:**
+  - Can withdraw funds before intent is fulfilled
+  - Can refund the intent after deadline passes
+  - Has special authorization for intent state changes
+  - Receives any excess funds after reward distribution
+
+  **Security:**
+  - Must be the address that funded the intent vault
+  - Used for access control in vault operations
+  - Validated during intent creation and modification
+
+  **Example:**
+  ```solidity
+  address creator = msg.sender;  // Typically the user creating the intent
+  ```
+
+  **Use Cases:**
+  - User wallets creating intents directly
+  - Smart contract wallets for automated strategies
+  - Protocol contracts for cross-chain operations
+</ParamField>
+
+<ParamField path="prover" type="address">
+  Address of the prover contract on the origin chain that must approve execution.
+
+  **Role:**
+  - Validates that the intent was executed correctly on the destination chain
+  - Receives cross-chain proofs from destination chain provers
+  - Authorizes reward distribution only after proof verification
+  - Implements specific proof mechanism (native rollup proofs, message bridges, etc.)
+
+  **Requirements:**
+  - Must implement the `IProver` interface
+  - Must be a trusted contract capable of verifying cross-chain execution
+  - Should have established communication with destination chain provers
+
+  **Prover Types:**
+  - **Native Provers**: Use chain-native proof mechanisms (OP Stack, Arbitrum, etc.)
+  - **Message Bridge Provers**: Use arbitrary message bridges (Hyperlane, LayerZero, Wormhole)
+  - **Oracle Provers**: Use oracle networks for proof validation
+  - **Local Provers**: For same-chain testing and development
+
+  **Example:**
+  ```solidity
+  address prover = 0x1234567890123456789012345678901234567890;  // Hyperlane prover
+  ```
+
+  **Security Consideration:** The prover is critical for security. Using an untrusted or compromised prover could allow false proof submission and unauthorized reward claims.
+</ParamField>
+
+<ParamField path="nativeAmount" type="uint256">
+  Amount of native tokens (in wei) offered as reward to the solver.
+
+  **Purpose:**
+  - Incentivizes solvers to execute the intent on the destination chain
+  - Compensates for gas costs, capital risk, and execution effort
+  - Escrowed in the intent vault on the origin chain
+
+  **Funding:**
+  - Must be provided as `msg.value` when calling `open()` or `openFor()`
+  - Held in the intent's vault contract until proven execution
+  - Released to the claimant (solver) after successful proof verification
+
+  **Calculation:**
+  ```solidity
+  // Estimate solver costs
+  uint256 destinationGasCost = estimateGas() * gasPrice;
+  uint256 proofSubmissionCost = 0.01 ether;  // Cost to submit proof
+  uint256 solverProfit = 0.02 ether;  // Solver's profit margin
+  
+  uint256 nativeAmount = destinationGasCost + proofSubmissionCost + solverProfit;
+  ```
+
+  **Example:**
+  ```solidity
+  uint256 nativeAmount = 0.05 ether;  // 0.05 ETH reward
+  
+  // Fund the intent
+  originSettler.open{value: nativeAmount}(order);
+  ```
+
+  **Note:** Use `0` if no native token reward is offered (only ERC20 rewards).
+</ParamField>
+
+<ParamField path="tokens" type="TokenAmount[]">
+  Array of ERC20 tokens and amounts offered as additional rewards to the solver.
+
+  **Purpose:**
+  - Provides multi-token reward structures
+  - Allows rewards in stablecoins, governance tokens, or protocol-specific tokens
+  - Enables complex incentive mechanisms
+
+  **Structure:**
+  ```solidity
+  struct TokenAmount {
+      address token;   // ERC20 token contract address
+      uint256 amount;  // Amount in token's smallest unit
+  }
+  ```
+
+  **Funding:**
+  - Tokens must be transferred to the vault before or during intent creation
+  - Requires ERC20 approval for the vault contract
+  - Can use Permit for gasless approvals
+
+  **Example:**
+  ```solidity
+  TokenAmount[] memory tokens = new TokenAmount[](2);
+  
+  // Reward 1: 100 USDC
+  tokens[0] = TokenAmount({
+      token: usdcAddress,
+      amount: 100 * 10**6  // 100 USDC (6 decimals)
+  });
+  
+  // Reward 2: 50 DAI
+  tokens[1] = TokenAmount({
+      token: daiAddress,
+      amount: 50 * 10**18  // 50 DAI (18 decimals)
+  });
+  
+  // Approve tokens for vault
+  IERC20(usdcAddress).approve(vaultAddress, 100 * 10**6);
+  IERC20(daiAddress).approve(vaultAddress, 50 * 10**18);
+  ```
+
+  **Important:** Always use correct decimal precision for each token.
+
+  See [TokenAmount Type](/api/types/intent#tokenamount) for more details.
+</ParamField>
+
+---
+
+## Reward Hash Calculation
+
+Rewards are hashed for intent identification and verification:
+
+```solidity
+bytes32 rewardHash = keccak256(abi.encode(reward));
+```
+
+This hash is:
+1. Used in intent hash calculation
+2. Transmitted to destination chain in `fill()` originData
+3. Verified during proof submission to ensure reward integrity
+
+**Full Intent Hash:**
+```solidity
+bytes32 intentHash = keccak256(
+    abi.encodePacked(
+        destination,
+        routeHash,
+        rewardHash
+    )
+);
+```
+
+---
+
+## Usage Examples
+
+### Simple Native Token Reward
+
+```solidity
+Reward memory reward = Reward({
+    deadline: uint64(block.timestamp + 1 hours),
+    creator: msg.sender,
+    prover: hyperlaneProverAddress,
+    nativeAmount: 0.05 ether,  // 0.05 ETH reward
+    tokens: new TokenAmount[](0)  // No ERC20 rewards
+});
+
+// Fund when opening intent
+originSettler.open{value: 0.05 ether}(order);
+```
+
+### Multi-Token Reward
+
+```solidity
+TokenAmount[] memory rewardTokens = new TokenAmount[](2);
+rewardTokens[0] = TokenAmount(usdcAddress, 50 * 10**6);   // 50 USDC
+rewardTokens[1] = TokenAmount(daiAddress, 25 * 10**18);   // 25 DAI
+
+Reward memory reward = Reward({
+    deadline: uint64(block.timestamp + 2 hours),
+    creator: msg.sender,
+    prover: layerZeroProverAddress,
+    nativeAmount: 0.01 ether,  // Small ETH reward for gas
+    tokens: rewardTokens
+});
+
+// Approve tokens
+IERC20(usdcAddress).approve(vaultAddress, 50 * 10**6);
+IERC20(daiAddress).approve(vaultAddress, 25 * 10**18);
+
+// Fund intent
+originSettler.open{value: 0.01 ether}(order);
+```
+
+### Protocol-Governed Reward
+
+```solidity
+Reward memory reward = Reward({
+    deadline: uint64(block.timestamp + 24 hours),  // Long deadline for complex operations
+    creator: address(treasuryContract),  // Protocol treasury as creator
+    prover: optimismNativeProverAddress,  // Native OP Stack prover
+    nativeAmount: 0.1 ether,
+    tokens: new TokenAmount[](1)
+});
+
+// Governance token reward
+reward.tokens[0] = TokenAmount({
+    token: governanceTokenAddress,
+    amount: 1000 * 10**18  // 1000 governance tokens
+});
+```
+
+---
+
+## Reward Economics
+
+### Calculating Appropriate Rewards
+
+Reward amounts should cover:
+
+1. **Destination Gas Costs:**
+   ```solidity
+   uint256 destGas = estimatedGasUnits * destGasPrice;
+   ```
+
+2. **Origin Gas Costs:**
+   ```solidity
+   uint256 originGas = proofSubmissionGas * originGasPrice;
+   ```
+
+3. **Capital Risk:**
+   ```solidity
+   uint256 capitalRisk = (maxSpentValue * riskPercentage) / 100;
+   ```
+
+4. **Solver Profit:**
+   ```solidity
+   uint256 profit = totalCosts * profitMargin / 100;
+   ```
+
+5. **Total Reward:**
+   ```solidity
+   uint256 totalReward = destGas + originGas + capitalRisk + profit;
+   ```
+
+### Dynamic Reward Adjustment
+
+For competitive solver markets, consider:
+
+```solidity
+// Base reward
+uint256 baseReward = calculateMinimumReward();
+
+// Urgency multiplier
+uint256 urgencyMultiplier = deadline < block.timestamp + 15 minutes ? 150 : 100;
+
+// Complexity multiplier
+uint256 complexityMultiplier = calls.length > 3 ? 120 : 100;
+
+// Final reward
+uint256 finalReward = (baseReward * urgencyMultiplier * complexityMultiplier) / 10000;
+```
+
+---
+
+## Reward Distribution Flow
+
+1. **Intent Creation:**
+   - User specifies reward parameters
+   - Funds (native + tokens) transferred to vault
+   - Vault holds funds in escrow
+
+2. **Intent Execution:**
+   - Solver executes route on destination chain
+   - Destination prover sends proof to origin prover
+
+3. **Proof Verification:**
+   - Origin prover receives and validates proof
+   - Prover marks intent as proven
+
+4. **Reward Claim:**
+   - Solver (claimant) calls vault to claim rewards
+   - Vault verifies proof status with prover
+   - Rewards transferred to claimant
+
+5. **Refund (if not executed):**
+   - After `reward.deadline`, creator can refund
+   - Funds returned to creator's address
+
+---
+
+## Security Considerations
+
+### Prover Trust
+
+**Critical:** The `prover` address has sole authority to mark intents as proven. Choose provers carefully:
+
+- ✅ **Trusted**: Native rollup provers, established message bridges
+- ⚠️ **Caution**: New or unaudited prover contracts
+- ❌ **Avoid**: Unknown or unverified contracts
+
+### Deadline Management
+
+```solidity
+// BAD: Route deadline after reward deadline
+route.deadline = block.timestamp + 2 hours;
+reward.deadline = block.timestamp + 1 hours;  // Proof may not arrive in time!
+
+// GOOD: Sufficient time for proof delivery
+route.deadline = block.timestamp + 1 hours;
+reward.deadline = block.timestamp + 3 hours;  // Plenty of time for proof
+```
+
+### Reward Funding
+
+```solidity
+// BAD: Insufficient msg.value
+reward.nativeAmount = 0.1 ether;
+originSettler.open{value: 0.05 ether}(order);  // Reverts!
+
+// GOOD: Exact or excess msg.value (excess refunded)
+reward.nativeAmount = 0.1 ether;
+originSettler.open{value: 0.1 ether}(order);
+```
+
+### Token Approvals
+
+```solidity
+// BAD: Forgotten approval
+reward.tokens[0] = TokenAmount(usdc, 100e6);
+originSettler.open(order);  // May revert on token transfer!
+
+// GOOD: Approve before opening
+IERC20(usdc).approve(vaultAddress, 100e6);
+originSettler.open(order);
+```
+
+---
+
+## Integration with ERC-7683
+
+The `Reward` struct is used in ERC-7683 integration:
+
+### In OrderData
+
+```solidity
+OrderData memory orderData = OrderData({
+    destination: destinationChainId,
+    route: encodedRoute,
+    reward: reward,  // Full Reward struct
+    routePortal: bytes32(uint256(uint160(portalAddress))),
+    routeDeadline: routeDeadline,
+    maxSpent: maxSpentOutputs
+});
+```
+
+### In ResolvedCrossChainOrder
+
+Rewards are converted to `Output[]` format for `minReceived`:
+
+```solidity
+// Native reward
+Output memory nativeOutput = Output({
+    token: bytes32(0),
+    amount: reward.nativeAmount,
+    recipient: bytes32(0),  // Unknown at creation (will be filler)
+    chainId: block.chainid  // Origin chain
+});
+
+// Token rewards
+for (uint i = 0; i < reward.tokens.length; i++) {
+    outputs[i] = Output({
+        token: bytes32(uint256(uint160(reward.tokens[i].token))),
+        amount: reward.tokens[i].amount,
+        recipient: bytes32(0),
+        chainId: block.chainid
+    });
+}
+```
+
+---
+
+## Related
+
+- [Intent Type](/api/types/intent) - Complete intent structure including reward
+- [Route Type](/api/types/route) - Routing instructions paired with rewards
+- [TokenAmount Type](/api/types/intent#tokenamount) - Token specification format
+- [OriginSettler](/api/erc7683/origin-settler) - Handles reward funding and escrow
+- [Prover Contracts](/api/provers) - Proof verification and reward authorization

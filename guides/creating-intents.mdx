@@ -1,0 +1,494 @@
+---
+title: Creating Intents
+description: Learn how to create and publish cross-chain intents with Eco Routes Protocol
+---
+
+## What is an Intent?
+
+An intent represents a user's desired outcome on a destination chain. It contains:
+
+- **Route**: The calls to execute on the destination chain, including required tokens
+- **Reward**: The compensation offered to solvers who execute the intent
+- **Destination**: The target chain ID where execution should occur
+
+Intents separate **what** you want done from **how** it gets done, allowing specialized solvers to compete to execute your transactions efficiently.
+
+## Intent Structure
+
+Eco Routes uses three core data structures defined in `contracts/types/Intent.sol`:
+
+### Intent
+
+```solidity Intent.sol
+struct Intent {
+    uint64 destination;  // Target chain ID
+    Route route;         // Execution instructions
+    Reward reward;       // Solver compensation
+}
+```
+
+### Route
+
+```solidity Intent.sol
+struct Route {
+    bytes32 salt;              // Unique identifier
+    uint64 deadline;           // Execution deadline
+    address portal;            // Destination portal address
+    uint256 nativeAmount;      // Native tokens for execution
+    TokenAmount[] tokens;      // ERC20 tokens for execution
+    Call[] calls;              // Contract calls to execute
+}
+```
+
+### Reward
+
+```solidity Intent.sol
+struct Reward {
+    uint64 deadline;           // Claim deadline
+    address creator;           // Intent creator
+    address prover;            // Proof contract address
+    uint256 nativeAmount;      // Native token reward
+    TokenAmount[] tokens;      // ERC20 token rewards
+}
+```
+
+## Creating Your First Intent
+
+Here's a complete example of creating an intent for a cross-chain token transfer.
+
+<Steps>
+  <Step title="Define the Intent Parameters">
+    First, define what you want to happen on the destination chain:
+
+    ```solidity
+    // Destination chain (e.g., Arbitrum)
+    uint64 destinationChainId = 42161;
+
+    // Unique salt to prevent duplicates
+    bytes32 salt = keccak256(abi.encodePacked(msg.sender, block.timestamp));
+
+    // Deadline: 1 hour from now
+    uint64 deadline = uint64(block.timestamp + 3600);
+    ```
+  </Step>
+
+  <Step title="Create Token Transfer Calls">
+    Define the calls to execute on the destination chain:
+
+    ```solidity
+    // Transfer 1000 USDC to recipient
+    Call[] memory calls = new Call[](1);
+    calls[0] = Call({
+        target: usdcTokenAddress,
+        data: abi.encodeWithSignature(
+            "transfer(address,uint256)",
+            recipientAddress,
+            1000e6  // 1000 USDC (6 decimals)
+        ),
+        value: 0
+    });
+    ```
+  </Step>
+
+  <Step title="Specify Required Tokens">
+    Declare which tokens the solver must provide:
+
+    ```solidity
+    // Solver must provide 1000 USDC
+    TokenAmount[] memory routeTokens = new TokenAmount[](1);
+    routeTokens[0] = TokenAmount({
+        token: usdcTokenAddress,
+        amount: 1000e6
+    });
+    ```
+  </Step>
+
+  <Step title="Define the Route">
+    Combine the execution parameters:
+
+    ```solidity
+    Route memory route = Route({
+        salt: salt,
+        deadline: deadline,
+        portal: destinationPortalAddress,
+        nativeAmount: 0,
+        tokens: routeTokens,
+        calls: calls
+    });
+    ```
+  </Step>
+
+  <Step title="Define the Reward">
+    Specify compensation for the solver:
+
+    ```solidity
+    // Offer 1010 USDC on source chain (10 USDC profit for solver)
+    TokenAmount[] memory rewardTokens = new TokenAmount[](1);
+    rewardTokens[0] = TokenAmount({
+        token: sourceUsdcAddress,
+        amount: 1010e6  // 1010 USDC reward
+    });
+
+    Reward memory reward = Reward({
+        deadline: deadline,
+        creator: msg.sender,
+        prover: proverAddress,
+        nativeAmount: 0,
+        tokens: rewardTokens
+    });
+    ```
+  </Step>
+
+  <Step title="Create the Complete Intent">
+    Assemble the full intent:
+
+    ```solidity
+    Intent memory intent = Intent({
+        destination: destinationChainId,
+        route: route,
+        reward: reward
+    });
+    ```
+  </Step>
+</Steps>
+
+## Publishing and Funding Intents
+
+Once you've created an intent, you need to publish and fund it. The `IntentSource` contract provides several methods.
+
+### Function Signatures
+
+From `contracts/IntentSource.sol`:
+
+```solidity IntentSource.sol
+/**
+ * @notice Creates and funds an intent in a single transaction
+ * @param intent The complete intent struct to be published and funded
+ * @param allowPartial Whether to allow partial funding
+ * @return intentHash Hash of the created and funded intent
+ * @return vault Address of the created vault
+ */
+function publishAndFund(
+    Intent calldata intent,
+    bool allowPartial
+) public payable returns (bytes32 intentHash, address vault);
+
+/**
+ * @notice Creates an intent without funding
+ * @param intent The complete intent struct to be published
+ * @return intentHash Hash of the created intent
+ * @return vault Address of the created vault
+ */
+function publish(
+    Intent calldata intent
+) public returns (bytes32 intentHash, address vault);
+
+/**
+ * @notice Funds an existing intent
+ * @param destination Destination chain ID for the intent
+ * @param routeHash Hash of the route component
+ * @param reward Reward structure containing distribution details
+ * @param allowPartial Whether to allow partial funding
+ * @return intentHash Hash of the funded intent
+ */
+function fund(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward,
+    bool allowPartial
+) external payable returns (bytes32 intentHash);
+```
+
+### Publish and Fund in One Transaction
+
+<Tabs>
+  <Tab title="ERC20 Rewards">
+    For intents with ERC20 token rewards:
+
+    ```solidity
+    // 1. Approve the IntentSource contract to spend your reward tokens
+    IERC20(sourceUsdcAddress).approve(address(intentSource), 1010e6);
+
+    // 2. Publish and fund the intent
+    (bytes32 intentHash, address vault) = intentSource.publishAndFund(
+        intent,
+        false  // Don't allow partial funding
+    );
+
+    // The intent is now live and solvers can see it
+    ```
+  </Tab>
+
+  <Tab title="Native Token Rewards">
+    For intents with ETH or native token rewards:
+
+    ```solidity
+    // Define reward with native tokens
+    Reward memory reward = Reward({
+        deadline: deadline,
+        creator: msg.sender,
+        prover: proverAddress,
+        nativeAmount: 0.1 ether,  // 0.1 ETH reward
+        tokens: new TokenAmount[](0)
+    });
+
+    // Publish and fund with ETH
+    (bytes32 intentHash, address vault) = intentSource.publishAndFund{value: 0.1 ether}(
+        intent,
+        false
+    );
+    ```
+  </Tab>
+
+  <Tab title="Mixed Rewards">
+    For intents with both native and ERC20 rewards:
+
+    ```solidity
+    // Approve ERC20 tokens
+    IERC20(tokenAddress).approve(address(intentSource), rewardAmount);
+
+    // Publish and fund with both
+    (bytes32 intentHash, address vault) = intentSource.publishAndFund{value: 0.05 ether}(
+        intent,
+        false
+    );
+    ```
+  </Tab>
+</Tabs>
+
+### Separate Publish and Fund
+
+You can also publish an intent first and fund it later:
+
+```solidity
+// 1. Publish without funding
+(bytes32 intentHash, address vault) = intentSource.publish(intent);
+
+// Intent is now published but not funded
+// Solvers will see it but won't execute until funded
+
+// 2. Fund later (by anyone)
+IERC20(sourceUsdcAddress).approve(address(intentSource), 1010e6);
+
+bytes32 routeHash = keccak256(abi.encode(intent.route));
+intentSource.fund(
+    intent.destination,
+    routeHash,
+    intent.reward,
+    false  // allowPartial
+);
+```
+
+<Note>
+  Anyone can fund an intent once it's published. The reward tokens are held in a deterministic vault contract until the intent is fulfilled.
+</Note>
+
+## Real-World Examples
+
+### Example 1: Cross-Chain Swap
+
+Swap USDC on Ethereum for USDT on Arbitrum:
+
+```solidity
+// Swap 1000 USDC (Ethereum) -> 1000 USDT (Arbitrum)
+Call[] memory calls = new Call[](1);
+calls[0] = Call({
+    target: usdtArbitrumAddress,
+    data: abi.encodeWithSignature(
+        "transfer(address,uint256)",
+        msg.sender,
+        1000e6
+    ),
+    value: 0
+});
+
+TokenAmount[] memory routeTokens = new TokenAmount[](1);
+routeTokens[0] = TokenAmount(usdtArbitrumAddress, 1000e6);
+
+TokenAmount[] memory rewardTokens = new TokenAmount[](1);
+rewardTokens[0] = TokenAmount(usdcEthereumAddress, 1005e6);  // 5 USDC fee
+
+Intent memory swapIntent = Intent({
+    destination: 42161,  // Arbitrum
+    route: Route({
+        salt: keccak256(abi.encodePacked(msg.sender, block.timestamp)),
+        deadline: uint64(block.timestamp + 1800),  // 30 minutes
+        portal: arbitrumPortalAddress,
+        nativeAmount: 0,
+        tokens: routeTokens,
+        calls: calls
+    }),
+    reward: Reward({
+        deadline: uint64(block.timestamp + 1800),
+        creator: msg.sender,
+        prover: proverAddress,
+        nativeAmount: 0,
+        tokens: rewardTokens
+    })
+});
+```
+
+### Example 2: Cross-Chain DeFi Interaction
+
+Deposit funds into a lending protocol on another chain:
+
+```solidity
+// Deposit 1 ETH into Aave on Optimism
+Call[] memory calls = new Call[](2);
+
+// Approve Aave pool
+calls[0] = Call({
+    target: wethOptimismAddress,
+    data: abi.encodeWithSignature(
+        "approve(address,uint256)",
+        aavePoolAddress,
+        1 ether
+    ),
+    value: 0
+});
+
+// Supply to Aave
+calls[1] = Call({
+    target: aavePoolAddress,
+    data: abi.encodeWithSignature(
+        "supply(address,uint256,address,uint16)",
+        wethOptimismAddress,
+        1 ether,
+        msg.sender,
+        0
+    ),
+    value: 0
+});
+
+TokenAmount[] memory routeTokens = new TokenAmount[](1);
+routeTokens[0] = TokenAmount(wethOptimismAddress, 1 ether);
+
+TokenAmount[] memory rewardTokens = new TokenAmount[](1);
+rewardTokens[0] = TokenAmount(wethEthereumAddress, 1.005 ether);
+
+Intent memory defiIntent = Intent({
+    destination: 10,  // Optimism
+    route: Route({
+        salt: keccak256(abi.encodePacked(msg.sender, block.timestamp)),
+        deadline: uint64(block.timestamp + 3600),
+        portal: optimismPortalAddress,
+        nativeAmount: 0,
+        tokens: routeTokens,
+        calls: calls
+    }),
+    reward: Reward({
+        deadline: uint64(block.timestamp + 3600),
+        creator: msg.sender,
+        prover: proverAddress,
+        nativeAmount: 0,
+        tokens: rewardTokens
+    })
+});
+```
+
+### Example 3: Native Token Transfer
+
+Transfer ETH to another chain:
+
+```solidity
+// Transfer 1 ETH to recipient on Base
+Call[] memory calls = new Call[](1);
+calls[0] = Call({
+    target: recipientAddress,
+    data: "",
+    value: 1 ether
+});
+
+Intent memory ethTransferIntent = Intent({
+    destination: 8453,  // Base
+    route: Route({
+        salt: keccak256(abi.encodePacked(msg.sender, block.timestamp)),
+        deadline: uint64(block.timestamp + 1800),
+        portal: basePortalAddress,
+        nativeAmount: 1 ether,  // Solver must provide 1 ETH
+        tokens: new TokenAmount[](0),
+        calls: calls
+    }),
+    reward: Reward({
+        deadline: uint64(block.timestamp + 1800),
+        creator: msg.sender,
+        prover: proverAddress,
+        nativeAmount: 1.01 ether,  // 0.01 ETH fee on source chain
+        tokens: new TokenAmount[](0)
+    })
+});
+
+// Fund with ETH
+intentSource.publishAndFund{value: 1.01 ether}(ethTransferIntent, false);
+```
+
+## Checking Intent Status
+
+You can check if an intent has been funded using `contracts/IntentSource.sol`:
+
+```solidity IntentSource.sol
+/**
+ * @notice Checks if an intent is completely funded
+ * @param intent Intent to validate
+ * @return True if intent is completely funded, false otherwise
+ */
+function isIntentFunded(Intent calldata intent) public view returns (bool);
+
+/**
+ * @notice Retrieves reward status for a given intent hash
+ * @param intentHash Hash of the intent to query
+ * @return status Current status of the intent
+ */
+function getRewardStatus(bytes32 intentHash) public view returns (Status status);
+```
+
+Usage:
+
+```solidity
+// Check if intent is funded
+bool isFunded = intentSource.isIntentFunded(intent);
+
+// Get detailed status
+bytes32 intentHash = keccak256(
+    abi.encodePacked(
+        intent.destination,
+        keccak256(abi.encode(intent.route)),
+        keccak256(abi.encode(intent.reward))
+    )
+);
+
+IIntentSource.Status status = intentSource.getRewardStatus(intentHash);
+// Status can be: Initial, Funded, Withdrawn, or Refunded
+```
+
+## Important Considerations
+
+<Warning>
+  **Deadline Management**: The route deadline must be before or equal to the reward deadline. Solvers need time to claim rewards after execution.
+</Warning>
+
+<Warning>
+  **Sufficient Rewards**: Ensure your rewards are attractive enough to incentivize solvers. Consider gas costs on both chains and solver profit margins.
+</Warning>
+
+<Note>
+  **Deterministic Vaults**: Reward tokens are stored in deterministic vault contracts created via CREATE2. The vault address is the same across all chains for the same intent hash.
+</Note>
+
+<Tip>
+  **Partial Funding**: Set `allowPartial = true` if you want to fund the intent gradually. This is useful for large intents or when multiple parties contribute to the reward.
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Fulfilling Intents" icon="check" href="/guides/fulfilling-intents">
+    Learn how solvers execute intents on destination chains
+  </Card>
+  <Card title="Proving Intents" icon="shield" href="/guides/proving-intents">
+    Understand how fulfillment is proven cross-chain
+  </Card>
+  <Card title="ERC-7683 Integration" icon="plug" href="/guides/erc7683-integration">
+    Use the standardized ERC-7683 interface
+  </Card>
+</CardGroup>

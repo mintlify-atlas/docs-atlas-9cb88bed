@@ -1,0 +1,376 @@
+---
+title: 'Testnet Deployment'
+description: 'Deploy Eco Routes Protocol to public testnets for integration testing'
+---
+
+Testnet deployment allows you to test the Eco Routes Protocol in a public environment with real bridge infrastructure before deploying to mainnet.
+
+## Supported Testnets
+
+Eco Routes can be deployed to any EVM-compatible testnet. Common testnets include:
+
+- **Ethereum Sepolia**
+- **Base Sepolia**
+- **Optimism Sepolia**
+- **Arbitrum Sepolia**
+- **Polygon Mumbai**
+- **BSC Testnet**
+- **Avalanche Fuji**
+
+## Prerequisites
+
+### Required Resources
+
+<Steps>
+  <Step title="Testnet Native Tokens">
+    Obtain testnet native tokens (ETH, MATIC, etc.) from faucets:
+    - [Ethereum Sepolia Faucet](https://sepoliafaucet.com/)
+    - [Base Sepolia Faucet](https://www.coinbase.com/faucets/base-ethereum-goerli-faucet)
+    - [Optimism Sepolia Faucet](https://app.optimism.io/faucet)
+    - [Arbitrum Sepolia Faucet](https://faucet.quicknode.com/arbitrum/sepolia)
+  </Step>
+  <Step title="RPC Endpoints">
+    Get RPC endpoints from providers:
+    - [Alchemy](https://www.alchemy.com/)
+    - [Infura](https://www.infura.io/)
+    - [QuickNode](https://www.quicknode.com/)
+    - Public RPC endpoints (rate-limited)
+  </Step>
+  <Step title="Block Explorer API Keys">
+    For contract verification:
+    - [Etherscan](https://etherscan.io/apis)
+    - [Basescan](https://basescan.org/apis)
+    - [Polygonscan](https://polygonscan.com/apis)
+  </Step>
+</Steps>
+
+### Bridge Contract Addresses
+
+Identify bridge contract addresses for your target testnets:
+
+**Hyperlane Mailbox Contracts**
+- Check [Hyperlane Docs](https://docs.hyperlane.xyz/) for testnet addresses
+
+**LayerZero Endpoints**
+- Check [LayerZero Docs](https://layerzero.gitbook.io/) for testnet endpoints
+
+**Metalayer Router Contracts**
+- Contact Metalayer for testnet deployment addresses
+
+**Polymer CrossL2ProverV2**
+- Check [Polymer Docs](https://docs.polymerlabs.org/) for testnet addresses
+
+## Environment Configuration
+
+### Configure .env File
+
+Create a `.env` file with testnet configuration:
+
+```bash .env
+# Deployment private key (NEVER use mainnet keys on testnet!)
+PRIVATE_KEY=your_testnet_private_key_here
+
+# Alchemy API key for RPC access
+ALCHEMY_API_KEY=your_alchemy_api_key
+
+# Chain configuration
+CHAIN_DATA_URL="https://raw.githubusercontent.com/eco/eco-chains/refs/heads/main/src/assets/chain.json"
+
+# Deployment output
+DEPLOY_FILE="out/deploy-testnet.csv"
+
+# Salt for deterministic deployment (use same as mainnet for consistency)
+SALT=0x88f72b566ae0c96f6fffac4bc8ac74909f61512ac0c06a8124d5ed420d306f90
+
+# Portal configuration (leave empty to deploy new Portal)
+PORTAL_CONTRACT=
+
+# Sepolia Hyperlane configuration (example)
+MAILBOX_CONTRACT=0xfFAEF09B3cd11D9b20d1a19bECca54EEC2884766
+
+# LayerZero Sepolia endpoint (example)
+LAYERZERO_ENDPOINT=0x6EDCE65403992e310A62460808c4b910D972f10f
+LAYERZERO_DELEGATE=
+
+# Metalayer router (example)
+ROUTER_CONTRACT=0x0000000000000000000000000000000000000000
+
+# Polymer CrossL2ProverV2 (example)
+POLYMER_CROSS_L2_PROVER_V2=0x0000000000000000000000000000000000000000
+
+# Cross-VM provers (optional)
+HYPER_CROSS_VM_PROVERS=
+META_CROSS_VM_PROVERS=
+LAYERZERO_CROSS_VM_PROVERS=
+POLYMER_CROSS_VM_PROVERS=
+
+# Verification configuration
+VERIFICATION_KEYS_FILE=verification-keys-testnet.json
+```
+
+### Create Verification Keys File
+
+Create `verification-keys-testnet.json` with API keys for each testnet:
+
+```json verification-keys-testnet.json
+{
+  "11155111": "your_etherscan_api_key_for_sepolia",
+  "84532": "your_basescan_api_key_for_base_sepolia",
+  "11155420": "your_optimistic_etherscan_api_key",
+  "421614": "your_arbiscan_api_key",
+  "80001": "your_polygonscan_api_key"
+}
+```
+
+Chain IDs:
+- Ethereum Sepolia: `11155111`
+- Base Sepolia: `84532`
+- Optimism Sepolia: `11155420`
+- Arbitrum Sepolia: `421614`
+- Polygon Mumbai: `80001`
+
+## Deployment Process
+
+### Single Chain Deployment
+
+Deploy to a single testnet using Forge:
+
+<CodeGroup>
+
+```bash Foundry
+# Deploy to Sepolia testnet
+forge script scripts/Deploy.s.sol \
+  --broadcast \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --verify \
+  --etherscan-api-key $ETHERSCAN_API_KEY
+```
+
+```bash With Environment Variables
+# Set environment variables
+export MAILBOX_CONTRACT=0xfFAEF09B3cd11D9b20d1a19bECca54EEC2884766
+export ROUTER_CONTRACT=0x0000000000000000000000000000000000000000
+export SALT=0x88f72b566ae0c96f6fffac4bc8ac74909f61512ac0c06a8124d5ed420d306f90
+export DEPLOY_FILE="out/deploy-sepolia.csv"
+
+# Deploy
+forge script scripts/Deploy.s.sol \
+  --broadcast \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --private-key $PRIVATE_KEY \
+  --verify
+```
+
+</CodeGroup>
+
+### Multi-Chain Deployment
+
+Deploy to multiple testnets using the deployment script:
+
+<Steps>
+  <Step title="Prepare Chain Data">
+    Create or update your chain data JSON with testnet configurations:
+    
+    ```json chain-data-testnet.json
+    {
+      "11155111": {
+        "url": "https://eth-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}",
+        "mailbox": "0xfFAEF09B3cd11D9b20d1a19bECca54EEC2884766",
+        "router": "0x0000000000000000000000000000000000000000",
+        "gasMultiplier": "120"
+      },
+      "84532": {
+        "url": "https://base-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}",
+        "mailbox": "0xYourBaseSepoliaMailbox",
+        "router": "0xYourBaseSepoliaRouter",
+        "gasMultiplier": "120"
+      }
+    }
+    ```
+  </Step>
+  <Step title="Update .env">
+    Point to your testnet chain data:
+    
+    ```bash
+    CHAIN_DATA_URL="./chain-data-testnet.json"
+    RESULTS_FILE="deployments/testnet-results.json"
+    ```
+  </Step>
+  <Step title="Run Deployment Script">
+    ```bash
+    ./scripts/deployRoutes.sh
+    ```
+    
+    The script will:
+    - Deploy to each chain in your chain data file
+    - Use deterministic addresses based on SALT
+    - Record deployments to CSV file
+    - Skip chains where contracts are already deployed
+  </Step>
+</Steps>
+
+### Deployment with Cross-VM Support
+
+For cross-chain testing with non-EVM chains:
+
+```bash
+# Set cross-VM prover addresses
+export HYPER_CROSS_VM_PROVERS="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+export LAYERZERO_CROSS_VM_PROVERS="0x5678901234abcdef5678901234abcdef5678901234abcdef5678901234abcdef"
+
+# Deploy
+./scripts/deployRoutes.sh
+```
+
+## Verify Deployment
+
+### Check Deployment Output
+
+```bash
+# View deployment results
+cat out/deploy-testnet.csv
+```
+
+Expected output:
+```csv
+ChainID,ContractAddress,ContractPath,ContractArguments
+11155111,0x742d35Cc6634C0532925a3b844Bc454e4438f44e,contracts/Portal.sol:Portal,0x
+11155111,0x8464135c8F25Da09e49BC8782676a84730C318bC,contracts/prover/HyperProver.sol:HyperProver,0x000000...
+```
+
+### Verify Contract Addresses
+
+Verify that contracts were deployed to expected deterministic addresses:
+
+```bash
+# Check Portal address
+cast code 0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY
+
+# Verify it matches across chains (should be same address)
+cast code 0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  --rpc-url https://base-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY
+```
+
+## Contract Verification
+
+Verify contracts on block explorers:
+
+```bash
+# Verify all deployed contracts
+./scripts/verifyRoutes.sh
+```
+
+This script will:
+- Read deployment data from CSV file
+- Verify each contract on its respective block explorer
+- Retry failed verifications
+- Provide verification summary
+
+For manual verification of a single contract:
+
+```bash
+forge verify-contract \
+  --chain sepolia \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --watch \
+  0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  contracts/Portal.sol:Portal
+```
+
+## Testing on Testnet
+
+### Integration Testing
+
+Test cross-chain intent flow on testnets:
+
+<Steps>
+  <Step title="Create Intent on Source Chain">
+    ```bash
+    # Create an intent on Sepolia
+    cast send $PORTAL_ADDRESS "publish(...)" \
+      --private-key $PRIVATE_KEY \
+      --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY
+    ```
+  </Step>
+  <Step title="Fund Intent">
+    Fund the intent with testnet tokens.
+  </Step>
+  <Step title="Fulfill on Destination Chain">
+    Execute fulfillment on destination testnet (e.g., Base Sepolia).
+  </Step>
+  <Step title="Verify Proof">
+    Monitor bridge message delivery and proof verification.
+  </Step>
+  <Step title="Withdraw Rewards">
+    Solver withdraws rewards on source chain after proof validation.
+  </Step>
+</Steps>
+
+### Monitor Transactions
+
+Use block explorers to monitor testnet transactions:
+- [Sepolia Etherscan](https://sepolia.etherscan.io/)
+- [Base Sepolia Explorer](https://sepolia.basescan.org/)
+- [Optimism Sepolia Explorer](https://sepolia-optimism.etherscan.io/)
+
+## Common Issues
+
+### Insufficient Testnet Funds
+
+<Warning>
+  Deployment requires gas for multiple transactions. Ensure you have sufficient testnet tokens before deploying.
+</Warning>
+
+Estimated gas costs:
+- Portal deployment: ~2-3M gas
+- Each Prover deployment: ~1-2M gas
+
+### RPC Rate Limiting
+
+If using public RPC endpoints, you may hit rate limits:
+
+```bash
+# Add delay between deployments
+forge script scripts/Deploy.s.sol \
+  --broadcast \
+  --rpc-url $RPC_URL \
+  --slow  # Adds delay between transactions
+```
+
+### Bridge Contract Not Deployed
+
+If bridge contracts aren't available on your target testnet:
+
+- Contact bridge provider for testnet addresses
+- Deploy only Portal without Provers for basic testing
+- Use alternative bridge protocols available on that testnet
+
+### Verification Failures
+
+If contract verification fails:
+
+```bash
+# Wait a few minutes for Etherscan to index the contract
+sleep 60
+
+# Retry verification
+forge verify-contract \
+  --chain sepolia \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --watch \
+  --constructor-args $(cast abi-encode "constructor(address,address,bytes32[])" $ARG1 $ARG2 $ARG3) \
+  $CONTRACT_ADDRESS \
+  $CONTRACT_PATH
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Verify Contracts" icon="check-circle" href="/deployment/verification">
+    Complete guide to contract verification
+  </Card>
+  <Card title="Mainnet Deployment" icon="rocket" href="/deployment/mainnet">
+    Deploy to production after testnet validation
+  </Card>
+</CardGroup>

@@ -1,0 +1,522 @@
+---
+title: Fulfilling Intents
+description: Learn how solvers fulfill cross-chain intents and earn rewards with Eco Routes Protocol
+---
+
+## What is Intent Fulfillment?
+
+Intent fulfillment is the process by which **solvers** execute user intents on destination chains. Solvers:
+
+1. Monitor published intents across chains
+2. Evaluate profitability based on rewards vs. execution costs
+3. Provide required tokens/assets on the destination chain
+4. Execute the intent's calls on the destination chain
+5. Prove fulfillment to claim rewards on the source chain
+
+## Fulfillment Contract
+
+The `Inbox` contract (`contracts/Inbox.sol`) handles intent fulfillment on destination chains.
+
+### Key Functions
+
+```solidity Inbox.sol
+/**
+ * @notice Fulfills an intent to be proven via storage proofs
+ * @dev Validates intent hash, executes calls, and marks as fulfilled
+ * @param intentHash The hash of the intent to fulfill
+ * @param route The route of the intent
+ * @param rewardHash The hash of the reward details
+ * @param claimant Cross-VM compatible claimant identifier
+ * @return Array of execution results from each call
+ */
+function fulfill(
+    bytes32 intentHash,
+    Route memory route,
+    bytes32 rewardHash,
+    bytes32 claimant
+) external payable returns (bytes[] memory);
+
+/**
+ * @notice Fulfills an intent and initiates proving in one transaction
+ * @dev Executes intent actions and sends proof message to source chain
+ * @param intentHash The hash of the intent to fulfill
+ * @param route The route of the intent
+ * @param rewardHash The hash of the reward details
+ * @param claimant Cross-VM compatible claimant identifier
+ * @param prover Address of prover on the destination chain
+ * @param sourceChainDomainID Domain ID of the source chain where the intent was created
+ * @param data Additional data for message formatting
+ * @return Array of execution results
+ */
+function fulfillAndProve(
+    bytes32 intentHash,
+    Route memory route,
+    bytes32 rewardHash,
+    bytes32 claimant,
+    address prover,
+    uint64 sourceChainDomainID,
+    bytes memory data
+) public payable returns (bytes[] memory);
+```
+
+## Fulfillment Process
+
+Here's a complete guide to fulfilling intents as a solver.
+
+<Steps>
+  <Step title="Monitor Published Intents">
+    Listen for `IntentPublished` events on source chains:
+
+    ```solidity
+    // Listen to IntentSource contract events
+    event IntentPublished(
+        bytes32 indexed intentHash,
+        uint64 destination,
+        bytes route,
+        address creator,
+        address prover,
+        uint64 deadline,
+        uint256 nativeAmount,
+        TokenAmount[] tokens
+    );
+    ```
+
+    Filter for intents on chains you support:
+
+    ```javascript
+    const filter = intentSource.filters.IntentPublished(
+        null,  // any intentHash
+        destinationChainId,  // your supported chain
+    );
+
+    intentSource.on(filter, (intentHash, destination, route, creator, prover, deadline, nativeAmount, tokens) => {
+        // Evaluate if profitable
+        evaluateIntent(intentHash, route, tokens);
+    });
+    ```
+  </Step>
+
+  <Step title="Evaluate Profitability">
+    Calculate if the intent is worth executing:
+
+    ```javascript
+    async function evaluateIntent(intentHash, routeData, rewardTokens) {
+        // Decode route
+        const route = decodeRoute(routeData);
+
+        // Calculate costs
+        const executionGas = estimateGas(route.calls);
+        const tokenCosts = calculateTokenCosts(route.tokens);
+        const gasCost = executionGas * gasPrice;
+
+        // Calculate rewards
+        const rewardValue = calculateRewardValue(rewardTokens);
+
+        // Check profitability (including profit margin)
+        const minProfit = 0.05; // 5% minimum profit
+        if (rewardValue > (tokenCosts + gasCost) * (1 + minProfit)) {
+            await fulfillIntent(intentHash, route, rewardHash);
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Verify Intent is Funded">
+    Check that the reward vault has sufficient funds:
+
+    ```solidity
+    // On the source chain
+    bool isFunded = intentSource.isIntentFunded(intent);
+    require(isFunded, "Intent not funded");
+
+    // Or check vault balance directly
+    address vaultAddress = intentSource.intentVaultAddress(intent);
+    uint256 balance = IERC20(rewardToken).balanceOf(vaultAddress);
+    ```
+  </Step>
+
+  <Step title="Approve Required Tokens">
+    The Portal needs approval to pull tokens for execution:
+
+    ```solidity
+    // Approve Portal to spend your tokens
+    for (uint256 i = 0; i < route.tokens.length; i++) {
+        IERC20(route.tokens[i].token).approve(
+            route.portal,
+            route.tokens[i].amount
+        );
+    }
+    ```
+  </Step>
+
+  <Step title="Fulfill the Intent">
+    Execute the intent on the destination chain:
+
+    ```solidity
+    // Calculate hashes
+    bytes32 routeHash = keccak256(abi.encode(route));
+    bytes32 intentHash = keccak256(
+        abi.encodePacked(destinationChainId, routeHash, rewardHash)
+    );
+
+    // Your address as claimant (for EVM)
+    bytes32 claimant = bytes32(uint256(uint160(msg.sender)));
+
+    // Fulfill the intent
+    bytes[] memory results = portal.fulfill{value: route.nativeAmount}(
+        intentHash,
+        route,
+        rewardHash,
+        claimant
+    );
+    ```
+  </Step>
+</Steps>
+
+## Complete Fulfillment Example
+
+Here's a complete Solidity example of fulfilling a token transfer intent:
+
+```solidity
+pragma solidity ^0.8.26;
+
+import {IInbox} from "./interfaces/IInbox.sol";
+import {Route, TokenAmount, Call} from "./types/Intent.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+contract Solver {
+    IInbox public portal;
+
+    constructor(address _portal) {
+        portal = IInbox(_portal);
+    }
+
+    /**
+     * @notice Fulfill a cross-chain token transfer intent
+     * @param intentHash Hash of the intent
+     * @param route Route details
+     * @param rewardHash Hash of reward details
+     */
+    function fulfillTokenTransfer(
+        bytes32 intentHash,
+        Route calldata route,
+        bytes32 rewardHash
+    ) external {
+        // 1. Verify route is for this chain
+        require(route.portal == address(portal), "Wrong portal");
+
+        // 2. Verify not expired
+        require(block.timestamp <= route.deadline, "Intent expired");
+
+        // 3. Approve tokens for Portal to pull
+        for (uint256 i = 0; i < route.tokens.length; i++) {
+            IERC20(route.tokens[i].token).approve(
+                address(portal),
+                route.tokens[i].amount
+            );
+        }
+
+        // 4. Fulfill intent
+        bytes32 claimant = bytes32(uint256(uint160(address(this))));
+
+        portal.fulfill{value: route.nativeAmount}(
+            intentHash,
+            route,
+            rewardHash,
+            claimant
+        );
+
+        // Intent is now fulfilled!
+        // Next step: prove fulfillment to claim rewards
+    }
+}
+```
+
+## Fulfill and Prove in One Transaction
+
+For faster reward claiming, use `fulfillAndProve` to combine fulfillment and proof initiation:
+
+```solidity
+// Calculate domain ID for the bridge
+// WARNING: Domain ID != Chain ID for some bridges!
+// Check your bridge's documentation
+uint64 sourceChainDomainID = getHyperlaneDomainId(sourceChainId);
+
+// Prover-specific data (e.g., bridge fees)
+bytes memory proverData = abi.encode(
+    bridgeFeeAmount,
+    otherProverParams
+);
+
+// Fulfill and prove in one call
+bytes[] memory results = portal.fulfillAndProve{value: totalValue}(
+    intentHash,
+    route,
+    rewardHash,
+    claimant,
+    proverAddress,        // Prover contract on destination chain
+    sourceChainDomainID,  // Bridge domain ID for source chain
+    proverData            // Bridge-specific data
+);
+```
+
+<Warning>
+  **Domain ID vs Chain ID**: The `sourceChainDomainID` parameter is NOT necessarily the same as the chain ID. Different bridge protocols use different domain ID systems:
+
+  - **Hyperlane**: Custom domain IDs (e.g., Ethereum mainnet = 1, but Polygon = 137)
+  - **LayerZero**: Uses endpoint IDs that differ from chain IDs
+  - **Polymer**: Uses chain IDs directly
+
+  Always consult your bridge provider's documentation for the correct domain ID mapping.
+</Warning>
+
+## Real-World Examples
+
+### Example 1: Simple Token Transfer
+
+```solidity
+// Intent: Transfer 1000 USDC to user on Arbitrum
+// Solver has USDC on Arbitrum and wants to earn rewards on Ethereum
+
+function fulfillUSDCTransfer(
+    bytes32 intentHash,
+    Route calldata route,
+    bytes32 rewardHash
+) external {
+    // Verify this is a token transfer to the expected recipient
+    require(route.calls.length == 1, "Expected single call");
+
+    // Approve USDC for portal
+    IERC20 usdc = IERC20(route.tokens[0].token);
+    usdc.approve(address(portal), route.tokens[0].amount);
+
+    // Fulfill
+    bytes32 claimant = bytes32(uint256(uint160(msg.sender)));
+    portal.fulfill(intentHash, route, rewardHash, claimant);
+
+    // The portal will:
+    // 1. Pull 1000 USDC from solver
+    // 2. Execute the transfer to recipient
+    // 3. Mark intent as fulfilled with our address as claimant
+}
+```
+
+### Example 2: DeFi Interaction
+
+```solidity
+// Intent: Deposit into Aave on Optimism
+// Solver executes multi-call intent
+
+function fulfillAaveDeposit(
+    bytes32 intentHash,
+    Route calldata route,
+    bytes32 rewardHash,
+    address hyperProver,
+    uint64 ethereumDomainId
+) external payable {
+    // Verify calls are for Aave
+    require(route.calls.length == 2, "Expected approve + supply");
+
+    // Approve WETH for portal to pull
+    IERC20 weth = IERC20(route.tokens[0].token);
+    weth.approve(address(portal), route.tokens[0].amount);
+
+    // Fulfill and prove in one tx
+    bytes memory proverData = "";
+    bytes32 claimant = bytes32(uint256(uint160(address(this))));
+
+    portal.fulfillAndProve{value: msg.value}(
+        intentHash,
+        route,
+        rewardHash,
+        claimant,
+        hyperProver,
+        ethereumDomainId,
+        proverData
+    );
+
+    // Portal will:
+    // 1. Pull WETH from solver
+    // 2. Approve Aave pool
+    // 3. Supply to Aave on behalf of user
+    // 4. Send proof to Ethereum via Hyperlane
+}
+```
+
+### Example 3: Cross-Chain Swap
+
+```solidity
+// Intent: Swap USDC (Ethereum) for USDT (Arbitrum)
+// Solver provides USDT on Arbitrum, claims USDC on Ethereum
+
+function fulfillCrossChainSwap(
+    bytes32 intentHash,
+    Route calldata route,
+    bytes32 rewardHash
+) external {
+    // Approve USDT for portal
+    IERC20 usdt = IERC20(route.tokens[0].token);
+    usdt.approve(address(portal), route.tokens[0].amount);
+
+    // Fulfill
+    bytes32 claimant = bytes32(uint256(uint160(address(this))));
+    portal.fulfill(intentHash, route, rewardHash, claimant);
+
+    // Solver provides: 1000 USDT on Arbitrum
+    // Solver receives: 1005 USDC on Ethereum (5 USDC profit)
+}
+```
+
+## Handling Fulfillment Results
+
+The `fulfill` function returns execution results for each call:
+
+```solidity
+bytes[] memory results = portal.fulfill(
+    intentHash,
+    route,
+    rewardHash,
+    claimant
+);
+
+// Check results
+for (uint256 i = 0; i < results.length; i++) {
+    // Decode based on expected return type
+    if (route.calls[i].target == usdcAddress) {
+        bool success = abi.decode(results[i], (bool));
+        require(success, "Transfer failed");
+    }
+}
+```
+
+## Claimant Identifiers
+
+The `claimant` parameter is a cross-VM compatible identifier:
+
+<Tabs>
+  <Tab title="EVM Addresses">
+    For EVM chains, convert your address to bytes32:
+
+    ```solidity
+    // Your EVM address as claimant
+    bytes32 claimant = bytes32(uint256(uint160(msg.sender)));
+
+    // Or for a specific address
+    bytes32 claimant = bytes32(uint256(uint160(solverAddress)));
+    ```
+  </Tab>
+
+  <Tab title="Solana Addresses">
+    For Solana, use the public key directly:
+
+    ```solidity
+    // Solana public key (already 32 bytes)
+    bytes32 claimant = solanaPublicKey;
+    ```
+  </Tab>
+
+  <Tab title="Other VMs">
+    For other virtual machines, convert to 32 bytes:
+
+    ```solidity
+    // Cosmos address (convert from bech32)
+    bytes32 claimant = cosmosAddressToBytes32("cosmos1...");
+
+    // Near account ID (hash if needed)
+    bytes32 claimant = keccak256(abi.encodePacked("account.near"));
+    ```
+  </Tab>
+</Tabs>
+
+## Intent Validation
+
+The Portal validates intents before execution:
+
+```solidity Inbox.sol
+// From _fulfill function
+if (block.timestamp > route.deadline) {
+    revert IntentExpired();
+}
+
+if (route.portal != address(this)) {
+    revert InvalidPortal(route.portal);
+}
+
+if (computedIntentHash != intentHash) {
+    revert InvalidHash(intentHash);
+}
+
+if (claimants[intentHash] != bytes32(0)) {
+    revert IntentAlreadyFulfilled(intentHash);
+}
+
+if (claimant == bytes32(0)) {
+    revert ZeroClaimant();
+}
+```
+
+This ensures:
+- Intent hasn't expired
+- Intent is for the correct portal
+- Intent hash is valid
+- Intent hasn't been fulfilled already
+- Claimant is valid
+
+## Gas Optimization Tips
+
+<Tip>
+  **Batch Processing**: Monitor multiple intents and fulfill them in batches using multicall patterns to save gas.
+</Tip>
+
+<Tip>
+  **Token Approval**: Use `approve(type(uint256).max)` for tokens you frequently use to avoid repeated approval transactions.
+</Tip>
+
+<Tip>
+  **Fulfill and Prove**: Use `fulfillAndProve` instead of separate `fulfill` and `prove` calls to save one transaction.
+</Tip>
+
+## Error Handling
+
+Common errors and their solutions:
+
+```solidity
+// Intent expired
+if (block.timestamp > route.deadline) {
+    // Skip this intent, monitor for new ones
+}
+
+// Insufficient token balance
+try IERC20(token).balanceOf(address(this)) returns (uint256 balance) {
+    if (balance < requiredAmount) {
+        // Rebalance or skip
+    }
+} catch {
+    // Token doesn't exist or error
+}
+
+// Intent already fulfilled
+try portal.fulfill(...) {
+    // Success
+} catch (bytes memory reason) {
+    if (bytes4(reason) == IInbox.IntentAlreadyFulfilled.selector) {
+        // Someone else fulfilled it first
+    }
+}
+```
+
+## Next Steps
+
+After fulfilling an intent, you need to prove the fulfillment to claim rewards:
+
+<CardGroup cols={2}>
+  <Card title="Proving Intents" icon="shield" href="/guides/proving-intents">
+    Learn how to prove fulfillment and claim your rewards
+  </Card>
+  <Card title="Creating Intents" icon="pen" href="/guides/creating-intents">
+    Understand the user perspective of creating intents
+  </Card>
+  <Card title="ERC-7683 Integration" icon="plug" href="/guides/erc7683-integration">
+    Use the standardized interface for fulfillment
+  </Card>
+</CardGroup>

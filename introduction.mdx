@@ -1,0 +1,124 @@
+---
+title: Introduction
+description: An intents-driven, permissionless, trust-neutral protocol for cross-chain transactions
+---
+
+# Welcome to Eco Routes
+
+Eco Routes is an intents-driven, permissionless, trust-neutral protocol for facilitating the creation, incentivized execution, and proof of cross-chain transactions. Built with ERC-7683 compatibility, it supports multiple cross-chain messaging protocols including Hyperlane, LayerZero, Metalayer, and Polymer.
+
+## What is Eco Routes?
+
+Eco Routes enables users to express their desired outcomes on destination chains through **intents**. An intent represents your end goals - the calls you want to make, the resources needed, and the rewards you're willing to pay for execution.
+
+The protocol connects three key participants:
+
+<CardGroup cols={3}>
+  <Card title="Users" icon="user">
+    Create cross-chain intents and escrow rewards for execution
+  </Card>
+  <Card title="Solvers" icon="robot">
+    Execute intents on destination chains for fees
+  </Card>
+  <Card title="Provers" icon="shield-check">
+    Verify intent fulfillment and enable reward settlement
+  </Card>
+</CardGroup>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="ERC-7683 compatible" icon="handshake">
+    Full implementation of the cross-chain order standard for seamless interoperability
+  </Card>
+  <Card title="Multi-chain support" icon="globe">
+    Works with any EVM chain and supports cross-VM integration
+  </Card>
+  <Card title="Multiple bridge support" icon="bridge">
+    Integrates with Hyperlane, LayerZero, Metalayer, and Polymer
+  </Card>
+  <Card title="Deterministic addresses" icon="link">
+    CREATE2-based deployment for consistent cross-chain addresses
+  </Card>
+  <Card title="Solver incentives" icon="coins">
+    Reward-based system encourages solver participation
+  </Card>
+  <Card title="Security-first" icon="lock">
+    Multi-layered validation through Portal and bridge-specific security modules
+  </Card>
+</CardGroup>
+
+## How it works
+
+The Eco Routes protocol follows a simple flow:
+
+<Steps>
+  <Step title="Create an intent">
+    Users define their desired cross-chain operations with specific parameters and escrow reward tokens in deterministic vaults.
+  </Step>
+  <Step title="Solver execution">
+    Solvers monitor intents, marshall required resources, and fulfill the intent on the destination chain.
+  </Step>
+  <Step title="Proof verification">
+    Provers verify that the intent was fulfilled correctly on the destination chain and relay proof back to the source chain.
+  </Step>
+  <Step title="Reward settlement">
+    Once proven, solvers withdraw their rewards from the vault on the source chain.
+  </Step>
+</Steps>
+
+<Note>
+  Intents can be published on any chain, regardless of where input and output tokens live. You can even disseminate intent information directly to solvers without publishing to the Portal.
+</Note>
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card 
+    title="Quickstart" 
+    icon="bolt" 
+    href="/quickstart"
+  >
+    Get up and running with Eco Routes in minutes
+  </Card>
+  <Card 
+    title="Architecture" 
+    icon="diagram-project" 
+    href="/architecture"
+  >
+    Understand the core components and how they work together
+  </Card>
+  <Card 
+    title="Core concepts" 
+    icon="book" 
+    href="/concepts/intents"
+  >
+    Learn about intents, routes, rewards, and the protocol lifecycle
+  </Card>
+  <Card 
+    title="API reference" 
+    icon="code" 
+    href="/api/portal"
+  >
+    Explore the complete contract API documentation
+  </Card>
+</CardGroup>
+
+## ERC-7683 integration
+
+Eco Routes implements [ERC-7683](https://eips.ethereum.org/EIPS/eip-7683), the standard for cross-chain order protocols. This enables:
+
+- **Standardized interface**: Compatible with any ERC-7683 tooling and infrastructure
+- **Ecosystem interoperability**: Works seamlessly with other intent-based protocols  
+- **Developer experience**: Familiar patterns for developers already using ERC-7683
+- **Future-proof**: Built on an evolving standard for cross-chain transactions
+
+Users can create and fulfill intents through both our native interface and the standardized ERC-7683 interface.
+
+## Support
+
+For questions or issues:
+
+1. Check existing GitHub issues
+2. Review test files for usage examples
+3. Examine the contract documentation for technical details

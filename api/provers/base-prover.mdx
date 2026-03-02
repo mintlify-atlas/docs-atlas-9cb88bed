@@ -1,0 +1,205 @@
+---
+title: "BaseProver"
+description: "Abstract base contract for all intent proving implementations"
+---
+
+## Overview
+
+`BaseProver` is an abstract contract that provides core storage and functionality for tracking proven intents and their claimants. All prover implementations inherit from this contract.
+
+**Contract:** `contracts/prover/BaseProver.sol`
+
+**Inheritance:** `IProver`, `ERC165`
+
+## Key Concepts
+
+### Proof Data Structure
+
+Each proven intent is stored with:
+- **claimant**: Address eligible to claim rewards
+- **destination**: Chain ID where the intent was proven
+
+### Intent Tracking
+
+Proven intents are tracked in the `_provenIntents` mapping. An empty struct (zero claimant) indicates an intent hasn't been proven yet.
+
+## Constructor
+
+```solidity
+constructor(address portal)
+```
+
+Initializes the BaseProver contract.
+
+<ParamField path="portal" type="address" required>
+  Address of the Portal contract. Cannot be zero address.
+</ParamField>
+
+**Errors:**
+- `ZeroPortal()`: Thrown if portal address is zero
+
+## State Variables
+
+### PORTAL
+
+```solidity
+address public immutable PORTAL
+```
+
+Address of the Portal contract. Immutable to prevent unauthorized changes.
+
+## View Functions
+
+### provenIntents
+
+```solidity
+function provenIntents(
+    bytes32 intentHash
+) external view returns (ProofData memory)
+```
+
+Returns proof data for a given intent hash.
+
+<ParamField path="intentHash" type="bytes32" required>
+  The intent hash to query
+</ParamField>
+
+**Returns:** `ProofData` struct containing:
+- `claimant` (address): Address eligible to claim rewards
+- `destination` (uint64): Chain ID where intent was proven
+
+**Location:** `contracts/prover/BaseProver.sol:34`
+
+## Internal Functions
+
+### _processIntentProofs
+
+```solidity
+function _processIntentProofs(
+    bytes calldata data,
+    uint64 destination
+) internal
+```
+
+Processes intent proofs from a cross-chain message.
+
+<ParamField path="data" type="bytes" required>
+  Encoded (intentHash, claimant) pairs. Must be a multiple of 64 bytes (32 for hash + 32 for claimant).
+</ParamField>
+
+<ParamField path="destination" type="uint64" required>
+  Chain ID where the intent is being proven
+</ParamField>
+
+**Behavior:**
+- Returns early if data is empty
+- Validates data length is multiple of 64 bytes
+- Skips non-EVM addresses that can't be converted
+- Skips zero addresses
+- Emits `IntentAlreadyProven` for already-proven intents (doesn't revert)
+- Emits `IntentProven` for newly proven intents
+
+**Errors:**
+- `ArrayLengthMismatch()`: Data length is not a multiple of 64 bytes
+
+**Location:** `contracts/prover/BaseProver.sol:57`
+
+## External Functions
+
+### challengeIntentProof
+
+```solidity
+function challengeIntentProof(
+    uint64 destination,
+    bytes32 routeHash,
+    bytes32 rewardHash
+) external
+```
+
+Challenges an intent proof if the destination chain ID doesn't match. This is a safety mechanism to ensure intents are only claimable when executed on their intended destination chains.
+
+<ParamField path="destination" type="uint64" required>
+  The intended destination chain ID
+</ParamField>
+
+<ParamField path="routeHash" type="bytes32" required>
+  The hash of the intent's route
+</ParamField>
+
+<ParamField path="rewardHash" type="bytes32" required>
+  The hash of the reward specification
+</ParamField>
+
+**Behavior:**
+- Computes intentHash from destination, routeHash, and rewardHash
+- Only invalidates if proof exists AND destination doesn't match
+- Deletes the proof from storage
+- Emits `IntentProofInvalidated` event
+
+**Note:** Can be called by anyone to remove invalid proofs.
+
+**Location:** `contracts/prover/BaseProver.sol:112`
+
+### supportsInterface
+
+```solidity
+function supportsInterface(
+    bytes4 interfaceId
+) public view virtual override returns (bool)
+```
+
+Implements ERC165 interface detection.
+
+<ParamField path="interfaceId" type="bytes4" required>
+  Interface identifier to check
+</ParamField>
+
+**Returns:** `true` if the interface is supported
+
+## Events
+
+### IntentProven
+
+```solidity
+event IntentProven(
+    bytes32 indexed intentHash,
+    address indexed claimant,
+    uint64 destination
+)
+```
+
+Emitted when an intent is successfully proven.
+
+### IntentAlreadyProven
+
+```solidity
+event IntentAlreadyProven(bytes32 intentHash)
+```
+
+Emitted when attempting to prove an already-proven intent. Uses event instead of error to allow batch processing to continue.
+
+### IntentProofInvalidated
+
+```solidity
+event IntentProofInvalidated(bytes32 indexed intentHash)
+```
+
+Emitted when an intent proof is invalidated via challenge.
+
+## Errors
+
+### ZeroPortal
+
+```solidity
+error ZeroPortal()
+```
+
+Thrown when portal address is zero during construction.
+
+### ArrayLengthMismatch
+
+```solidity
+error ArrayLengthMismatch()
+```
+
+Thrown when proof data length is not a multiple of 64 bytes.

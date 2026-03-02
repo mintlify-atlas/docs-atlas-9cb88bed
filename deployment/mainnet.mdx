@@ -1,0 +1,485 @@
+---
+title: 'Mainnet Deployment'
+description: 'Production deployment of Eco Routes Protocol to mainnet chains'
+---
+
+<Warning>
+  **Production Deployment**: Mainnet deployment involves real assets and irreversible transactions. Follow this guide carefully and ensure thorough testing on testnets before proceeding.
+</Warning>
+
+## Pre-Deployment Checklist
+
+Before deploying to mainnet, ensure you have:
+
+<Steps>
+  <Step title="Completed Testnet Deployment">
+    Successfully deployed and tested on testnets with the same configuration.
+  </Step>
+  <Step title="Security Audit">
+    Conducted security audits of any custom modifications to the protocol.
+  </Step>
+  <Step title="Verified Bridge Contracts">
+    Confirmed bridge contract addresses on all target mainnets.
+  </Step>
+  <Step title="Secure Key Management">
+    Set up secure private key management (hardware wallet, multisig, etc.).
+  </Step>
+  <Step title="Sufficient Funds">
+    Ensured deployer account has sufficient native tokens for gas on all chains.
+  </Step>
+  <Step title="Backup Plan">
+    Prepared contingency plans for deployment failures.
+  </Step>
+</Steps>
+
+## Supported Mainnet Chains
+
+Eco Routes can be deployed to any EVM-compatible mainnet:
+
+- **Ethereum Mainnet**
+- **Base**
+- **Optimism**
+- **Arbitrum One**
+- **Polygon**
+- **BSC (Binance Smart Chain)**
+- **Avalanche C-Chain**
+- **TRON Mainnet** (special support)
+
+## Environment Configuration
+
+### Secure .env Setup
+
+<Warning>
+  **Never commit mainnet .env files to version control.** Use `.gitignore` to exclude `.env` files.
+</Warning>
+
+Create a production `.env` file:
+
+```bash .env.production
+# CRITICAL: Use hardware wallet or secure key management
+PRIVATE_KEY=your_secure_mainnet_private_key
+
+# Alchemy API key for reliable RPC access
+ALCHEMY_API_KEY=your_production_alchemy_api_key
+
+# Chain configuration
+CHAIN_DATA_URL="https://raw.githubusercontent.com/eco/eco-chains/refs/heads/main/src/assets/chain.json"
+
+# Deployment output
+DEPLOY_FILE="out/deploy-mainnet.csv"
+
+# IMPORTANT: Use the same SALT as testnet for consistent addresses
+SALT=0x88f72b566ae0c96f6fffac4bc8ac74909f61512ac0c06a8124d5ed420d306f90
+
+# Portal configuration
+# Leave empty to deploy new Portal, or set existing Portal address
+PORTAL_CONTRACT=
+
+# Ethereum Mainnet Bridge Contracts
+MAILBOX_CONTRACT=0xYourHyperlaneMailboxAddress
+ROUTER_CONTRACT=0xYourMetalayerRouterAddress
+LAYERZERO_ENDPOINT=0xYourLayerZeroEndpointAddress
+LAYERZERO_DELEGATE=0xYourDelegateAddress  # Optional, defaults to deployer
+POLYMER_CROSS_L2_PROVER_V2=0xYourPolymerProverAddress
+
+# Cross-VM prover addresses for non-EVM chains
+HYPER_CROSS_VM_PROVERS=0xSolanaHyperProverAddress,0xCosmosHyperProverAddress
+META_CROSS_VM_PROVERS=0xSolanaMetaProverAddress
+LAYERZERO_CROSS_VM_PROVERS=0xSolanaLZProverAddress
+POLYMER_CROSS_VM_PROVERS=0xSolanaPolymerProverAddress
+
+# Multi-chain deployment
+RESULTS_FILE=deployments/mainnet-results.json
+APPEND_RESULTS=false
+
+# Contract verification
+VERIFICATION_KEYS_FILE=verification-keys-mainnet.json
+```
+
+### Bridge Contract Addresses
+
+**Hyperlane Mailbox** (Ethereum Mainnet)
+- Check [Hyperlane Deployments](https://docs.hyperlane.xyz/docs/deploy/addresses) for official addresses
+
+**LayerZero Endpoint** (Ethereum Mainnet)
+- Ethereum: `0x66A71Dcef29A0fFBDBE3c6a460a3B5BC225Cd675`
+- Check [LayerZero Docs](https://layerzero.gitbook.io/docs/technical-reference/mainnet/supported-chain-ids) for other chains
+
+**Chainlink CCIP Router**
+- Ethereum Mainnet: `0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D`
+- Base: `0x881e3A65B4d4a04dD529061dd0071cf975F58bCD`
+
+### Verification Keys Configuration
+
+Create `verification-keys-mainnet.json`:
+
+```json verification-keys-mainnet.json
+{
+  "1": "your_etherscan_mainnet_api_key",
+  "8453": "your_basescan_api_key",
+  "10": "your_optimistic_etherscan_api_key",
+  "42161": "your_arbiscan_api_key",
+  "137": "your_polygonscan_api_key",
+  "56": "your_bscscan_api_key",
+  "43114": "your_snowtrace_api_key"
+}
+```
+
+Chain IDs:
+- Ethereum Mainnet: `1`
+- Base: `8453`
+- Optimism: `10`
+- Arbitrum One: `42161`
+- Polygon: `137`
+- BSC: `56`
+- Avalanche C-Chain: `43114`
+
+## Deployment Process
+
+### Pre-Flight Verification
+
+Before deployment, verify your configuration:
+
+```bash
+# Verify wallet address
+cast wallet address --private-key $PRIVATE_KEY
+
+# Check balance on Ethereum Mainnet
+cast balance $(cast wallet address --private-key $PRIVATE_KEY) \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY
+
+# Estimate deployment costs (dry run)
+forge script scripts/Deploy.s.sol \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  # Note: Don't include --broadcast for dry run
+```
+
+### Single Chain Deployment
+
+Deploy to a single mainnet:
+
+```bash
+# Deploy to Ethereum Mainnet
+forge script scripts/Deploy.s.sol \
+  --broadcast \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --private-key $PRIVATE_KEY \
+  --verify \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --slow  # Add delays between transactions for stability
+```
+
+<Warning>
+  **Gas Price Monitoring**: Monitor gas prices before deployment. Consider using `--with-gas-price` flag to set maximum gas price.
+</Warning>
+
+```bash
+# Deploy with gas price limit (in gwei)
+forge script scripts/Deploy.s.sol \
+  --broadcast \
+  --rpc-url $MAINNET_RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --with-gas-price 30000000000  # 30 gwei
+```
+
+### Multi-Chain Deployment
+
+Deploy to multiple mainnets using the deployment script:
+
+<Steps>
+  <Step title="Prepare Chain Data">
+    Ensure your chain data includes all target mainnets with correct bridge addresses.
+  </Step>
+  <Step title="Load Environment">
+    ```bash
+    source .env.production
+    ```
+  </Step>
+  <Step title="Execute Deployment">
+    ```bash
+    # Deploy to all configured chains
+    ./scripts/deployRoutes.sh
+    ```
+    
+    The script will:
+    - Deploy CREATE3 factory if needed
+    - Deploy Portal contract (if not using existing)
+    - Deploy configured Prover contracts
+    - Record all deployments to CSV
+    - Use same SALT for deterministic addresses
+  </Step>
+  <Step title="Monitor Deployment">
+    Watch the deployment output carefully. The script will show:
+    - Deployer wallet address
+    - SALT value being used
+    - Deployment status for each chain
+    - Deployed contract addresses
+  </Step>
+</Steps>
+
+### Alternative: Using Deployment Script Directly
+
+```bash
+# Deploy to all chains with explicit configuration
+CHAIN_DATA_URL="./chain-data-mainnet.json" \
+RESULTS_FILE="deployments/mainnet-results.json" \
+SALT=0x88f72b566ae0c96f6fffac4bc8ac74909f61512ac0c06a8124d5ed420d306f90 \
+PRIVATE_KEY=$PRIVATE_KEY \
+ALCHEMY_API_KEY=$ALCHEMY_API_KEY \
+./scripts/deployRoutes.sh
+```
+
+### Cross-VM Deployment
+
+For cross-chain deployment including non-EVM chains:
+
+```bash
+# Set cross-VM prover addresses
+export HYPER_CROSS_VM_PROVERS="0x1234...solana,0x5678...cosmos"
+export LAYERZERO_CROSS_VM_PROVERS="0x9abc...solana"
+
+# Deploy with cross-VM support
+./scripts/deployRoutes.sh
+```
+
+Cross-VM prover addresses must be in bytes32 format:
+```bash
+# Example: Convert Solana address to bytes32
+# Solana addresses are 32 bytes, can be used directly
+CROSS_VM_PROVERS="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+```
+
+## Post-Deployment Verification
+
+### Verify Deployment Output
+
+```bash
+# Check deployment results
+cat out/deploy-mainnet.csv
+```
+
+Expected format:
+```csv
+ChainID,ContractAddress,ContractPath,ContractArguments
+1,0x742d35Cc6634C0532925a3b844Bc454e4438f44e,contracts/Portal.sol:Portal,0x
+1,0x8464135c8F25Da09e49BC8782676a84730C318bC,contracts/prover/HyperProver.sol:HyperProver,0x000000...
+8453,0x742d35Cc6634C0532925a3b844Bc454e4438f44e,contracts/Portal.sol:Portal,0x
+```
+
+### Verify Deterministic Addresses
+
+<Warning>
+  **Critical**: Verify that Portal addresses match across all chains. This is essential for cross-chain operations.
+</Warning>
+
+```bash
+# Check Portal address on Ethereum
+cast code 0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY
+
+# Verify same address on Base
+cast code 0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  --rpc-url https://base-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY
+
+# Addresses should match if using same SALT
+```
+
+### Contract Verification on Block Explorers
+
+Verify all deployed contracts:
+
+```bash
+# Verify all contracts using verification script
+./scripts/verifyRoutes.sh
+```
+
+The script will:
+- Read deployment data from CSV
+- Verify each contract on respective block explorers
+- Retry failed verifications automatically
+- Provide verification summary
+
+Manual verification example:
+
+```bash
+# Verify Portal on Ethereum Mainnet
+forge verify-contract \
+  --chain mainnet \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --watch \
+  0x742d35Cc6634C0532925a3b844Bc454e4438f44e \
+  contracts/Portal.sol:Portal
+
+# Verify HyperProver with constructor args
+forge verify-contract \
+  --chain mainnet \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --constructor-args $CONSTRUCTOR_ARGS \
+  --watch \
+  0x8464135c8F25Da09e49BC8782676a84730C318bC \
+  contracts/prover/HyperProver.sol:HyperProver
+```
+
+## Security Best Practices
+
+### Private Key Management
+
+<Warning>
+  **Never expose mainnet private keys**. Use hardware wallets or multisig contracts for production deployments.
+</Warning>
+
+Recommended approaches:
+
+**Hardware Wallet (Ledger/Trezor)**
+```bash
+forge script scripts/Deploy.s.sol \
+  --broadcast \
+  --rpc-url $MAINNET_RPC_URL \
+  --ledger \
+  --sender $DEPLOYER_ADDRESS
+```
+
+**Multisig Deployment**
+- Deploy using a multisig wallet like Gnosis Safe
+- Create deployment transaction proposal
+- Gather required signatures
+- Execute deployment through multisig
+
+### Gas Price Management
+
+<Warning>
+  **Monitor gas prices** during deployment. Mainnet gas costs can be significant.
+</Warning>
+
+```bash
+# Check current gas price
+cast gas-price --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY
+
+# Set maximum gas price (30 gwei example)
+forge script scripts/Deploy.s.sol \
+  --broadcast \
+  --rpc-url $MAINNET_RPC_URL \
+  --with-gas-price 30000000000
+```
+
+### Deployment Validation
+
+After deployment, validate critical configurations:
+
+```bash
+# Verify Portal claimant (should be zero or your governance address)
+cast call $PORTAL_ADDRESS "claimant()" \
+  --rpc-url $MAINNET_RPC_URL
+
+# Verify Prover portal address
+cast call $HYPER_PROVER_ADDRESS "portal()" \
+  --rpc-url $MAINNET_RPC_URL
+
+# Should return Portal address
+```
+
+## Rollback Procedures
+
+### If Deployment Fails
+
+If deployment fails mid-process:
+
+1. **Don't Panic**: Contracts are deployed atomically
+2. **Check Deployment File**: See which contracts were deployed
+3. **Set PORTAL_CONTRACT**: Use deployed Portal address for subsequent attempts
+4. **Retry**: Re-run deployment script - it will skip already deployed contracts
+
+```bash
+# Continue deployment using existing Portal
+export PORTAL_CONTRACT=0x742d35Cc6634C0532925a3b844Bc454e4438f44e
+./scripts/deployRoutes.sh
+```
+
+### If Wrong Configuration Deployed
+
+<Warning>
+  **Contracts are immutable**. If deployed with wrong configuration, you must deploy new contracts with a different SALT.
+</Warning>
+
+```bash
+# Generate new SALT for redeployment
+export SALT=$(cast keccak "2.0.1-beta.1")
+echo "New SALT: $SALT"
+
+# Deploy with new SALT
+./scripts/deployRoutes.sh
+```
+
+## Post-Deployment Tasks
+
+<Steps>
+  <Step title="Verify All Contracts">
+    Ensure all contracts are verified on block explorers.
+  </Step>
+  <Step title="Update Documentation">
+    Document deployed addresses for integrators and users.
+  </Step>
+  <Step title="Configure Monitoring">
+    Set up monitoring for contract events and transactions.
+  </Step>
+  <Step title="Test Cross-Chain Flow">
+    Execute test intents to verify cross-chain functionality.
+  </Step>
+  <Step title="Announce Deployment">
+    Publish deployment addresses and contract verification links.
+  </Step>
+</Steps>
+
+## Deployment Costs Estimation
+
+Estimated gas costs (may vary with network conditions):
+
+| Contract | Estimated Gas | Cost at 30 gwei |
+|----------|---------------|------------------|
+| Portal | ~2,500,000 | ~0.075 ETH |
+| HyperProver | ~1,800,000 | ~0.054 ETH |
+| MetaProver | ~1,800,000 | ~0.054 ETH |
+| LayerZeroProver | ~2,000,000 | ~0.060 ETH |
+| PolymerProver | ~1,500,000 | ~0.045 ETH |
+| **Total (all provers)** | **~9,600,000** | **~0.288 ETH** |
+
+<Warning>
+  Actual costs vary with gas prices and network conditions. Always maintain sufficient funds in deployer account.
+</Warning>
+
+## Troubleshooting
+
+### Insufficient Funds Error
+
+Ensure deployer has sufficient balance:
+```bash
+cast balance $DEPLOYER_ADDRESS --rpc-url $MAINNET_RPC_URL
+```
+
+### Nonce Too Low/High
+
+If nonce errors occur:
+```bash
+# Check current nonce
+cast nonce $DEPLOYER_ADDRESS --rpc-url $MAINNET_RPC_URL
+
+# Wait for pending transactions to complete
+```
+
+### Contract Already Deployed
+
+If contracts are already deployed at expected addresses:
+- Deployment script will skip and log existing deployment
+- Verify the existing deployment is correct
+- Use `PORTAL_CONTRACT` env var to reference existing Portal
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Contract Verification" icon="check-circle" href="/deployment/verification">
+    Complete guide to verifying deployed contracts
+  </Card>
+  <Card title="Integration Guide" icon="plug" href="/guides/erc7683-integration">
+    Integrate Eco Routes into your application
+  </Card>
+</CardGroup>

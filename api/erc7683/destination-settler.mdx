@@ -1,0 +1,328 @@
+---
+title: 'DestinationSettler'
+description: 'ERC-7683 compliant contract for filling cross-chain intents on the destination chain'
+---
+
+## Overview
+
+The `DestinationSettler` contract implements the ERC-7683 destination chain settlement interface for Eco Routes Protocol. It handles intent fulfillment on destination chains by processing fill requests from solvers and executing the associated route instructions.
+
+**Contract Location:** `contracts/ERC7683/DestinationSettler.sol`
+
+## ERC-7683 Compliance
+
+This contract implements the destination-side of the [ERC-7683](https://eips.ethereum.org/EIPS/eip-7683) Cross-Chain Intent Settlement standard. It provides a standardized `fill()` interface that solvers can call to fulfill intents that were opened on the origin chain.
+
+## Key Features
+
+- **Standardized Fill Interface**: Implements ERC-7683 `fill()` method for universal solver integration
+- **Flexible Prover Support**: Supports multiple proof mechanisms via configurable prover addresses
+- **Cross-VM Compatibility**: Uses `bytes32` for cross-chain address representation
+- **Atomic Fulfillment**: Combines route execution and proof submission in a single transaction
+- **Event Emission**: Emits `OrderFilled` event for off-chain indexing and monitoring
+
+## Core Functions
+
+### fill
+
+```solidity
+function fill(
+    bytes32 orderId,
+    bytes calldata originData,
+    bytes calldata fillerData
+) external payable
+```
+
+Fills a single leg of a cross-chain order on the destination chain. This is the primary entry point for solvers to fulfill intents.
+
+**Parameters:**
+
+<ParamField path="orderId" type="bytes32">
+  Unique identifier for the order being filled (intent hash from origin chain)
+</ParamField>
+
+<ParamField path="originData" type="bytes">
+  Data emitted on the origin chain to parameterize the fill. This is ABI-encoded as `(bytes encodedRoute, bytes32 rewardHash)` where:
+  - `encodedRoute`: ABI-encoded `Route` struct with execution instructions
+  - `rewardHash`: Hash of the `Reward` struct from the origin chain
+</ParamField>
+
+<ParamField path="fillerData" type="bytes">
+  Data provided by the filler to inform the fill or express preferences. This is ABI-encoded as `(address prover, uint64 source, bytes32 claimant, bytes proverData)` where:
+  - `prover`: Address of the prover contract on this destination chain
+  - `source`: Source chain ID where the intent was created
+  - `claimant`: Cross-VM compatible claimant identifier (can be converted to address)
+  - `proverData`: Additional data required by the chosen prover for proof submission
+</ParamField>
+
+**Emits:**
+- `OrderFilled(bytes32 orderId, address solver)`
+
+**Process Flow:**
+
+1. Decodes `originData` to extract `encodedRoute` and `rewardHash`
+2. Emits `OrderFilled` event with `orderId` and solver address (`msg.sender`)
+3. Decodes `fillerData` to extract prover, source, claimant, and proverData
+4. Calls `fulfillAndProve()` to execute the route and submit proof
+
+**Usage Example:**
+
+```solidity
+// Prepare origin data (from origin chain's Open event)
+bytes memory originData = abi.encode(encodedRoute, rewardHash);
+
+// Prepare filler data
+bytes memory fillerData = abi.encode(
+    proverAddress,
+    sourceChainId,
+    bytes32(uint256(uint160(claimantAddress))),
+    proverSpecificData
+);
+
+// Fill the order
+destinationSettler.fill{value: requiredValue}(
+    orderId,
+    originData,
+    fillerData
+);
+```
+
+---
+
+## Abstract Methods
+
+### fulfillAndProve
+
+```solidity
+function fulfillAndProve(
+    bytes32 intentHash,
+    Route memory route,
+    bytes32 rewardHash,
+    bytes32 claimant,
+    address prover,
+    uint64 source,
+    bytes memory data
+) public payable virtual returns (bytes[] memory)
+```
+
+Fulfills an intent and initiates proving in one atomic transaction. Must be implemented by concrete settlement contracts.
+
+**Parameters:**
+
+<ParamField path="intentHash" type="bytes32">
+  The hash of the intent to fulfill (same as `orderId`)
+</ParamField>
+
+<ParamField path="route" type="Route">
+  The route information containing execution instructions (decoded from `originData`)
+</ParamField>
+
+<ParamField path="rewardHash" type="bytes32">
+  The hash of the reward details (used to reconstruct full intent hash)
+</ParamField>
+
+<ParamField path="claimant" type="bytes32">
+  Cross-VM compatible claimant identifier who will receive rewards on origin chain
+</ParamField>
+
+<ParamField path="prover" type="address">
+  Address of prover contract on the destination chain that will submit the proof
+</ParamField>
+
+<ParamField path="source" type="uint64">
+  The source chain ID where the intent was created (for proof submission)
+</ParamField>
+
+<ParamField path="data" type="bytes">
+  Additional data for message formatting and prover-specific requirements
+</ParamField>
+
+**Returns:**
+
+<ParamField type="bytes[] memory">
+  Array of execution results from the route's contract calls
+</ParamField>
+
+**Implementation Requirements:**
+
+1. Validate that the route hasn't been executed already
+2. Execute all calls in the `route.calls` array sequentially
+3. Verify execution succeeded and handle any failures appropriately
+4. Submit proof to the prover contract for relay to origin chain
+5. Return execution results for off-chain verification
+
+---
+
+## Events
+
+### OrderFilled
+
+```solidity
+event OrderFilled(bytes32 orderId, address solver)
+```
+
+Emitted when an order is successfully filled.
+
+**Parameters:**
+
+<ParamField path="orderId" type="bytes32">
+  Hash of the fulfilled intent (unique order identifier)
+</ParamField>
+
+<ParamField path="solver" type="address">
+  Address that fulfilled the intent (`msg.sender` of the `fill()` call)
+</ParamField>
+
+**Usage:**
+
+Off-chain indexers and monitoring systems can listen to this event to:
+- Track which solvers are fulfilling orders
+- Monitor order fulfillment rates and latency
+- Verify that orders are being filled correctly
+- Trigger subsequent actions in multi-leg workflows
+
+---
+
+## Data Encoding Specifications
+
+### originData Encoding
+
+The `originData` parameter must be ABI-encoded as:
+
+```solidity
+bytes memory originData = abi.encode(
+    bytes encodedRoute,  // abi.encode(Route)
+    bytes32 rewardHash   // keccak256(abi.encode(reward))
+);
+```
+
+**Why this format?**
+- Separates route execution data from reward verification data
+- `rewardHash` ensures reward integrity without passing full reward struct
+- Reduces cross-chain data size while maintaining security
+
+### fillerData Encoding
+
+The `fillerData` parameter must be ABI-encoded as:
+
+```solidity
+bytes memory fillerData = abi.encode(
+    address prover,      // Prover contract address on destination chain
+    uint64 source,       // Source chain ID
+    bytes32 claimant,    // Cross-VM compatible claimant (e.g., bytes32(uint256(uint160(address))))
+    bytes proverData     // Prover-specific data for proof formatting
+);
+```
+
+**Why this format?**
+- Allows solvers to choose their preferred prover
+- Supports cross-VM addresses via `bytes32` encoding
+- Flexible `proverData` for different proof mechanisms
+
+---
+
+## Implementation Notes
+
+### Security Considerations
+
+1. **Reentrancy Protection**: Implementations should include reentrancy guards in `fulfillAndProve`
+2. **Route Validation**: Verify route deadline hasn't passed before execution
+3. **Proof Verification**: Ensure proof is submitted successfully before considering fill complete
+4. **Native Token Handling**: Contract is payable to support routes requiring native tokens
+
+### Cross-VM Address Handling
+
+The contract uses `bytes32` for the `claimant` parameter to support cross-VM compatibility:
+
+```solidity
+// Converting EVM address to bytes32
+bytes32 claimant = bytes32(uint256(uint160(evmAddress)));
+
+// Converting bytes32 back to EVM address (if needed)
+address claimantAddress = address(uint160(uint256(claimant)));
+```
+
+For non-EVM chains, the encoding may differ based on the address format of the target chain.
+
+### Prover Integration
+
+The contract supports multiple prover types:
+- **Message Bridge Provers**: Use arbitrary message bridges (Hyperlane, LayerZero, etc.)
+- **Native Provers**: Use chain-native proof mechanisms (OP Stack, Arbitrum, etc.)
+- **Local Provers**: For same-chain testing and development
+
+Each prover may require different `proverData` formats. Consult the specific prover documentation for requirements.
+
+---
+
+## Integration Guide
+
+### For Solvers
+
+1. **Monitor Origin Chain**: Listen for `Open` events from `OriginSettler`
+2. **Extract Order Data**: Get `orderId` and `fillInstructions[0].originData`
+3. **Prepare Fill Parameters**:
+   - Use `originData` from the `Open` event
+   - Encode `fillerData` with your chosen prover and claimant address
+4. **Execute Fill**: Call `fill()` with prepared parameters
+5. **Verify Completion**: Check for `OrderFilled` event emission
+6. **Claim Rewards**: Wait for proof to reach origin chain, then claim from vault
+
+### For Contract Implementers
+
+1. **Inherit DestinationSettler**: Create concrete contract extending this abstract contract
+2. **Implement fulfillAndProve**: Add your route execution and proving logic
+3. **Add Security Checks**: Include reentrancy protection, deadline validation, etc.
+4. **Configure Provers**: Set up supported prover contracts and validation
+5. **Test End-to-End**: Verify full flow from origin to destination and back
+
+---
+
+## Example Implementation
+
+```solidity
+contract MyDestinationSettler is DestinationSettler {
+    mapping(bytes32 => bool) public filledIntents;
+
+    function fulfillAndProve(
+        bytes32 intentHash,
+        Route memory route,
+        bytes32 rewardHash,
+        bytes32 claimant,
+        address prover,
+        uint64 source,
+        bytes memory data
+    ) public payable override returns (bytes[] memory) {
+        // Check not already filled
+        require(!filledIntents[intentHash], "Already filled");
+        filledIntents[intentHash] = true;
+
+        // Validate deadline
+        require(block.timestamp <= route.deadline, "Route expired");
+
+        // Execute route calls
+        bytes[] memory results = new bytes[](route.calls.length);
+        for (uint i = 0; i < route.calls.length; i++) {
+            (bool success, bytes memory result) = route.calls[i].target.call{
+                value: route.calls[i].value
+            }(route.calls[i].data);
+            require(success, "Call failed");
+            results[i] = result;
+        }
+
+        // Submit proof via prover
+        IProver(prover).prove(intentHash, claimant, source, data);
+
+        return results;
+    }
+}
+```
+
+---
+
+## Related
+
+- [OriginSettler](/api/erc7683/origin-settler) - Settlement contract on origin chain
+- [Route Type](/api/types/route) - Route structure and execution instructions
+- [Reward Type](/api/types/reward) - Reward structure and validation
+- [ERC-7683 Standard](https://eips.ethereum.org/EIPS/eip-7683) - Official EIP specification

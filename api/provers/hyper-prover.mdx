@@ -1,0 +1,299 @@
+---
+title: "HyperProver"
+description: "Prover implementation using Hyperlane's cross-chain messaging system"
+---
+
+## Overview
+
+`HyperProver` processes proof messages from Hyperlane's mailbox and records proven intents. It extends `MessageBridgeProver` to provide Hyperlane-specific messaging functionality.
+
+**Contract:** `contracts/prover/HyperProver.sol`
+
+**Inheritance:** `IMessageRecipient`, `MessageBridgeProver`, `Semver`
+
+**Proof Type:** `"Hyperlane"`
+
+<Warning>
+  **Domain ID vs Chain ID:** Hyperlane uses domain IDs that may differ from chain IDs. Always consult [Hyperlane's documentation](https://docs.hyperlane.xyz/) to determine the correct domain ID for your target chain.
+</Warning>
+
+## Constructor
+
+```solidity
+constructor(
+    address mailbox,
+    address portal,
+    bytes32[] memory provers
+)
+```
+
+Initializes the HyperProver contract.
+
+<ParamField path="mailbox" type="address" required>
+  Address of the local Hyperlane mailbox contract
+</ParamField>
+
+<ParamField path="portal" type="address" required>
+  Address of the Portal contract
+</ParamField>
+
+<ParamField path="provers" type="bytes32[]" required>
+  Array of trusted prover addresses (as bytes32 for cross-VM compatibility)
+</ParamField>
+
+**Errors:**
+- `MessengerContractCannotBeZeroAddress()`: Mailbox address is zero
+- `ZeroPortal()`: Portal address is zero
+
+**Location:** `contracts/prover/HyperProver.sol:55`
+
+## State Variables
+
+### MAILBOX
+
+```solidity
+address public immutable MAILBOX
+```
+
+Address of the local Hyperlane mailbox contract.
+
+### PROOF_TYPE
+
+```solidity
+string public constant PROOF_TYPE = "Hyperlane"
+```
+
+Constant indicating this contract uses Hyperlane for proving.
+
+## Core Functions
+
+### prove
+
+```solidity
+function prove(
+    address sender,
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) external payable
+```
+
+Inherited from `MessageBridgeProver`. Initiates proving process by dispatching a message via Hyperlane.
+
+<ParamField path="sender" type="address" required>
+  Address that initiated the proving request (receives refund if overpaid)
+</ParamField>
+
+<ParamField path="domainID" type="uint64" required>
+  Hyperlane domain ID of the source chain (where the intent was created). **NOT the chain ID.**
+</ParamField>
+
+<ParamField path="encodedProofs" type="bytes" required>
+  Encoded (intentHash, claimant) pairs. Format: `[intentHash1][claimant1][intentHash2][claimant2]...`
+</ParamField>
+
+<ParamField path="data" type="bytes" required>
+  ABI-encoded `UnpackedData` struct containing:
+  - `sourceChainProver` (bytes32): Address of prover on source chain
+  - `metadata` (bytes): Metadata for Hyperlane message
+  - `hookAddr` (address): Address of post-dispatch hook (zero for default)
+</ParamField>
+
+**Behavior:**
+1. Calculates required fee via `fetchFee`
+2. Validates msg.value covers fee
+3. Dispatches message via Hyperlane mailbox
+4. Refunds excess payment to sender
+
+**Errors:**
+- `InsufficientFee(uint256 required)`: msg.value is less than required fee
+- `DomainIdTooLarge(uint64 domainID)`: Domain ID exceeds uint32.max
+
+**Location:** Inherited from `MessageBridgeProver.sol:112`
+
+### handle
+
+```solidity
+function handle(
+    uint32 origin,
+    bytes32 sender,
+    bytes calldata messageBody
+) public payable
+```
+
+Handles incoming Hyperlane messages containing proof data. Called by the Hyperlane mailbox.
+
+<ParamField path="origin" type="uint32" required>
+  Origin domain ID from the source chain. Cannot be zero.
+</ParamField>
+
+<ParamField path="sender" type="bytes32" required>
+  Address that dispatched the message on source chain (as bytes32). Cannot be zero.
+</ParamField>
+
+<ParamField path="messageBody" type="bytes" required>
+  Encoded message with format: `[chainId (8 bytes)][intentHash1][claimant1][intentHash2][claimant2]...`
+</ParamField>
+
+**Behavior:**
+1. Validates origin is not zero
+2. Validates sender is whitelisted
+3. Extracts chain ID from first 8 bytes of messageBody
+4. Processes intent proofs using `_processIntentProofs`
+
+**Errors:**
+- `MessageOriginChainDomainIDCannotBeZero()`: Origin is zero
+- `MessageSenderCannotBeZeroAddress()`: Sender is zero
+- `UnauthorizedIncomingProof(bytes32 sender)`: Sender not whitelisted
+
+**Access Control:** Only callable by MAILBOX
+
+**Location:** `contracts/prover/HyperProver.sol:71`
+
+### fetchFee
+
+```solidity
+function fetchFee(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) public view override returns (uint256)
+```
+
+Calculates the fee required for Hyperlane message dispatch.
+
+<ParamField path="domainID" type="uint64" required>
+  Hyperlane domain ID of the source chain
+</ParamField>
+
+<ParamField path="encodedProofs" type="bytes" required>
+  Encoded (intentHash, claimant) pairs
+</ParamField>
+
+<ParamField path="data" type="bytes" required>
+  ABI-encoded UnpackedData struct
+</ParamField>
+
+**Returns:** Fee amount in native tokens required for message dispatch
+
+**Location:** `contracts/prover/HyperProver.sol:130`
+
+### getProofType
+
+```solidity
+function getProofType() external pure override returns (string memory)
+```
+
+**Returns:** `"Hyperlane"`
+
+## Internal Functions
+
+### _dispatchMessage
+
+```solidity
+function _dispatchMessage(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data,
+    uint256 fee
+) internal override
+```
+
+Implementation of message dispatch for Hyperlane. Called by base `prove()` function after validations.
+
+**Behavior:**
+1. Unpacks data into structured format
+2. Formats Hyperlane message parameters
+3. Calls `IMailbox(MAILBOX).dispatch` with fee
+
+**Location:** `contracts/prover/HyperProver.sol:93`
+
+### _formatHyperlaneMessage
+
+```solidity
+function _formatHyperlaneMessage(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    UnpackedData memory unpacked
+) internal view returns (DispatchParams memory params)
+```
+
+Formats data for Hyperlane message dispatch.
+
+**Returns:** `DispatchParams` struct with:
+- `destinationDomain` (uint32): Hyperlane domain ID
+- `recipientAddress` (bytes32): Source chain prover address
+- `messageBody` (bytes): Encoded proofs
+- `metadata` (bytes): Message metadata
+- `hook` (IPostDispatchHook): Post-dispatch hook (defaults to mailbox's default hook)
+
+**Location:** `contracts/prover/HyperProver.sol:201`
+
+## Data Structures
+
+### UnpackedData
+
+```solidity
+struct UnpackedData {
+    bytes32 sourceChainProver; // Address of prover on source chain
+    bytes metadata;            // Metadata for Hyperlane message
+    address hookAddr;          // Address of post-dispatch hook
+}
+```
+
+Contains fields decoded from the `data` parameter in `prove()` and `fetchFee()`.
+
+### DispatchParams
+
+```solidity
+struct DispatchParams {
+    uint32 destinationDomain;   // Hyperlane domain ID
+    bytes32 recipientAddress;   // Recipient address as bytes32
+    bytes messageBody;          // Encoded message body
+    bytes metadata;             // Additional metadata
+    IPostDispatchHook hook;     // Post-dispatch hook contract
+}
+```
+
+Consolidates message dispatch parameters to reduce stack usage.
+
+## Domain ID Mapping
+
+<Warning>
+  Hyperlane domain IDs are **NOT** chain IDs. You must use Hyperlane-specific domain IDs.
+
+  **Examples:**
+  - Ethereum Mainnet: Domain 1 (Chain ID 1)
+  - Optimism: Domain 10 (Chain ID 10)
+  - Arbitrum: Domain 42161 (Chain ID 42161)
+  
+  Check [Hyperlane's domain registry](https://docs.hyperlane.xyz/docs/reference/domains) for the complete mapping.
+</Warning>
+
+## Usage Example
+
+```solidity
+// On destination chain, prepare proof data
+bytes memory data = abi.encode(
+    UnpackedData({
+        sourceChainProver: bytes32(uint256(uint160(sourceProverAddress))),
+        metadata: "",
+        hookAddr: address(0) // Use default hook
+    })
+);
+
+// Calculate fee
+uint256 fee = hyperProver.fetchFee(
+    hyperlaneSourceDomainId,
+    encodedProofs,
+    data
+);
+
+// Send proof via portal
+portal.prove{value: fee}(
+    address(hyperProver),
+    hyperlaneSourceDomainId,
+    encodedProofs,
+    data
+);
+```

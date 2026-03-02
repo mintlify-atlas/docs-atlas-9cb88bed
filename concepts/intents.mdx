@@ -1,0 +1,147 @@
+---
+title: "Intents"
+description: "Understanding intents in the Eco Routes Protocol"
+---
+
+## What are Intents?
+
+Intents are the core primitive of the Eco Routes Protocol. An intent represents a complete specification for a cross-chain action, including:
+
+- **What** should be executed on the destination chain
+- **Where** the execution should happen (destination chain)
+- **When** it must be completed by (deadline)
+- **Who** gets rewarded for fulfilling it
+
+Intents enable users to express their desired cross-chain outcome without needing to understand the underlying bridge infrastructure or execution mechanics.
+
+## Intent Structure
+
+The protocol defines intents using a composite struct that combines routing information with reward parameters:
+
+```solidity contracts/types/Intent.sol
+struct Intent {
+    uint64 destination;
+    Route route;
+    Reward reward;
+}
+```
+
+### Destination
+
+The `destination` field specifies the target chain ID where the intent should be executed.
+
+### Route
+
+The `route` contains all execution instructions for the destination chain:
+
+```solidity contracts/types/Intent.sol
+struct Route {
+    bytes32 salt;
+    uint64 deadline;
+    address portal;
+    uint256 nativeAmount;
+    TokenAmount[] tokens;
+    Call[] calls;
+}
+```
+
+**Fields:**
+
+- `salt` - Unique identifier provided by the intent creator to prevent duplicates
+- `deadline` - Timestamp by which the route must be executed
+- `portal` - Address of the portal contract on the destination chain that receives messages
+- `nativeAmount` - Amount of native tokens to send with route execution
+- `tokens` - Array of ERC20 tokens required for executing calls on the destination chain
+- `calls` - Array of contract calls to execute on the destination chain in sequence
+
+### Reward
+
+The `reward` defines who can execute the intent and what they receive:
+
+```solidity contracts/types/Intent.sol
+struct Reward {
+    uint64 deadline;
+    address creator;
+    address prover;
+    uint256 nativeAmount;
+    TokenAmount[] tokens;
+}
+```
+
+**Fields:**
+
+- `deadline` - Timestamp after which the intent can no longer be executed
+- `creator` - Address that created the intent and has authority to modify/cancel
+- `prover` - Address of the prover contract that must approve execution
+- `nativeAmount` - Amount of native tokens offered as reward
+- `tokens` - Array of ERC20 tokens and amounts offered as additional rewards
+
+## Supporting Structures
+
+### Call
+
+Represents a single contract call to be executed:
+
+```solidity contracts/types/Intent.sol
+struct Call {
+    address target;
+    bytes data;
+    uint256 value;
+}
+```
+
+- `target` - The contract address to call
+- `data` - ABI-encoded function call data
+- `value` - Amount of native tokens to send with the call
+
+### TokenAmount
+
+Represents a token and amount pair:
+
+```solidity contracts/types/Intent.sol
+struct TokenAmount {
+    address token;
+    uint256 amount;
+}
+```
+
+- `token` - Address of the ERC20 token contract
+- `amount` - Amount of tokens in the token's smallest unit
+
+## Intent Hash
+
+Each intent is uniquely identified by its hash, which is computed from its components:
+
+```solidity
+intentHash = keccak256(abi.encodePacked(destination, routeHash, rewardHash))
+```
+
+Where:
+- `routeHash = keccak256(abi.encode(route))`
+- `rewardHash = keccak256(abi.encode(reward))`
+
+This hash serves as the intent's unique identifier throughout its lifecycle.
+
+<Note>
+The intent hash is deterministic - the same intent parameters will always produce the same hash, enabling reliable cross-chain verification.
+</Note>
+
+## Intent Vault
+
+Each intent has an associated vault contract deployed using CREATE2 for deterministic addressing:
+
+```solidity contracts/IntentSource.sol
+function intentVaultAddress(
+    Intent calldata intent
+) public view returns (address)
+```
+
+The vault:
+- Holds the reward tokens until the intent is fulfilled
+- Uses the intent hash as the CREATE2 salt for predictable addresses
+- Can be computed before deployment
+- Enables secure, permissionless reward distribution
+
+<Info>
+Vaults are deployed on-demand when needed, but their addresses can be calculated in advance. This allows solvers to verify rewards are available before fulfilling an intent.
+</Info>

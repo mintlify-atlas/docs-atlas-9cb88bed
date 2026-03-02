@@ -1,0 +1,283 @@
+---
+title: Hyperlane Integration
+description: HyperProver implementation for cross-chain intent proving
+---
+
+HyperProver integrates with Hyperlane's cross-chain messaging system to prove intent fulfillment. It implements the `IMessageRecipient` interface to receive proof messages from the Hyperlane mailbox.
+
+## Contract Overview
+
+Location: `contracts/prover/HyperProver.sol`
+
+```solidity contracts/prover/HyperProver.sol
+contract HyperProver is IMessageRecipient, MessageBridgeProver, Semver {
+    string public constant PROOF_TYPE = "Hyperlane";
+    address public immutable MAILBOX;
+}
+```
+
+## Constructor
+
+From `HyperProver.sol:55-62`:
+
+```solidity contracts/prover/HyperProver.sol
+constructor(
+    address mailbox,
+    address portal,
+    bytes32[] memory provers
+) MessageBridgeProver(portal, provers, 0)
+```
+
+### Parameters
+
+<ParamField path="mailbox" type="address">
+  Address of the local Hyperlane mailbox contract
+</ParamField>
+
+<ParamField path="portal" type="address">
+  Address of the Portal contract that manages rewards
+</ParamField>
+
+<ParamField path="provers" type="bytes32[]">
+  Array of trusted prover addresses on other chains (as bytes32 for cross-VM compatibility)
+</ParamField>
+
+## Prove Function
+
+Inherited from `MessageBridgeProver.sol:112-117`:
+
+```solidity contracts/prover/MessageBridgeProver.sol
+function prove(
+    address sender,
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) external payable only(PORTAL);
+```
+
+<Warning>
+  The `domainID` parameter uses **Hyperlane domain IDs**, which are NOT the same as chain IDs. Consult [Hyperlane documentation](https://docs.hyperlane.xyz/docs/reference/domains) for domain ID mappings.
+</Warning>
+
+### Data Parameter Structure
+
+The `data` parameter must be ABI-encoded as an `UnpackedData` struct (from `HyperProver.sol:22-26`):
+
+```solidity contracts/prover/HyperProver.sol
+struct UnpackedData {
+    bytes32 sourceChainProver; // Address of prover on source chain
+    bytes metadata;            // Metadata for Hyperlane message
+    address hookAddr;          // Address of post-dispatch hook
+}
+```
+
+**Encoding example:**
+
+```solidity
+bytes memory data = abi.encode(
+    UnpackedData({
+        sourceChainProver: bytes32(uint256(uint160(sourceProverAddress))),
+        metadata: "",  // Or custom Hyperlane metadata
+        hookAddr: address(0)  // Use mailbox default hook
+    })
+);
+```
+
+## Message Dispatch
+
+Internal dispatch implementation from `HyperProver.sol:93-120`:
+
+```solidity contracts/prover/HyperProver.sol
+function _dispatchMessage(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data,
+    uint256 fee
+) internal override {
+    UnpackedData memory unpacked = _unpackData(data);
+    
+    DispatchParams memory params = _formatHyperlaneMessage(
+        domainID,
+        encodedProofs,
+        unpacked
+    );
+    
+    IMailbox(MAILBOX).dispatch{value: fee}(
+        params.destinationDomain,
+        params.recipientAddress,
+        params.messageBody,
+        params.metadata,
+        params.hook
+    );
+}
+```
+
+### Message Formatting
+
+From `HyperProver.sol:201-224`:
+
+```solidity contracts/prover/HyperProver.sol
+function _formatHyperlaneMessage(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    UnpackedData memory unpacked
+) internal view returns (DispatchParams memory params) {
+    // Convert domain ID to Hyperlane domain ID format
+    if (domainID > type(uint32).max) {
+        revert DomainIdTooLarge(domainID);
+    }
+    params.destinationDomain = uint32(domainID);
+    
+    // Use source chain prover as recipient
+    params.recipientAddress = unpacked.sourceChainProver;
+    params.messageBody = encodedProofs;
+    params.metadata = unpacked.metadata;
+    
+    // Default to mailbox's hook if none provided
+    params.hook = (unpacked.hookAddr == address(0))
+        ? IMailbox(MAILBOX).defaultHook()
+        : IPostDispatchHook(unpacked.hookAddr);
+}
+```
+
+## Message Reception
+
+From `HyperProver.sol:71-83`:
+
+```solidity contracts/prover/HyperProver.sol
+function handle(
+    uint32 origin,
+    bytes32 sender,
+    bytes calldata messageBody
+) public payable only(MAILBOX) {
+    if (origin == 0) revert MessageOriginChainDomainIDCannotBeZero();
+    if (sender == bytes32(0)) revert MessageSenderCannotBeZeroAddress();
+    
+    _handleCrossChainMessage(sender, messageBody);
+}
+```
+
+The `handle()` function:
+1. Validates origin domain ID is non-zero
+2. Validates sender address is non-zero
+3. Checks sender is whitelisted
+4. Extracts chain ID from message prefix
+5. Processes intent proofs
+
+## Fee Calculation
+
+From `HyperProver.sol:130-141`:
+
+```solidity contracts/prover/HyperProver.sol
+function fetchFee(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) public view override returns (uint256) {
+    UnpackedData memory unpacked = _unpackData(data);
+    return _fetchFee(domainID, encodedProofs, unpacked);
+}
+```
+
+Internal implementation (from `HyperProver.sol:162-183`):
+
+```solidity contracts/prover/HyperProver.sol
+function _fetchFee(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    UnpackedData memory unpacked
+) internal view returns (uint256) {
+    DispatchParams memory params = _formatHyperlaneMessage(
+        domainID,
+        encodedProofs,
+        unpacked
+    );
+    
+    return IMailbox(MAILBOX).quoteDispatch(
+        params.destinationDomain,
+        params.recipientAddress,
+        params.messageBody,
+        params.metadata,
+        params.hook
+    );
+}
+```
+
+## Usage Example
+
+```solidity
+// On destination chain (e.g., Optimism)
+address hyperProver = 0x...;  // HyperProver on Optimism
+uint64 sourceDomainID = 1;  // Hyperlane domain ID for Ethereum
+
+// Prepare proof data
+bytes32[] memory intentHashes = new bytes32[](1);
+intentHashes[0] = intentHash;
+
+// Encode additional data
+bytes memory data = abi.encode(
+    IHyperProver.UnpackedData({
+        sourceChainProver: bytes32(uint256(uint160(ethereumProverAddress))),
+        metadata: "",
+        hookAddr: address(0)
+    })
+);
+
+// Calculate fee
+uint256 fee = IProver(hyperProver).fetchFee(
+    sourceDomainID,
+    encodedProofs,
+    data
+);
+
+// Send proof (called by Inbox contract)
+IProver(hyperProver).prove{value: fee}(
+    msg.sender,
+    sourceDomainID,
+    encodedProofs,
+    data
+);
+```
+
+## Domain ID Reference
+
+<Warning>
+  Always check [Hyperlane's official domain registry](https://docs.hyperlane.xyz/docs/reference/domains) for accurate domain IDs. These may differ from chain IDs.
+</Warning>
+
+Common mappings (verify before use):
+
+| Chain | Chain ID | Hyperlane Domain ID |
+|-------|----------|--------------------|
+| Ethereum | 1 | 1 |
+| Optimism | 10 | 10 |
+| Polygon | 137 | 137 |
+| Arbitrum | 42161 | 42161 |
+
+## Security Considerations
+
+### Whitelist Validation
+
+Only whitelisted prover addresses can send proof messages. This is validated in `_handleCrossChainMessage()` from `MessageBridgeProver.sol:81-82`:
+
+```solidity contracts/prover/MessageBridgeProver.sol
+if (!isWhitelisted(messageSender)) {
+    revert UnauthorizedIncomingProof(messageSender);
+}
+```
+
+### Hook Security
+
+Custom hooks can be specified, but default to the mailbox's default hook:
+
+```solidity contracts/prover/HyperProver.sol
+params.hook = (unpacked.hookAddr == address(0))
+    ? IMailbox(MAILBOX).defaultHook()
+    : IPostDispatchHook(unpacked.hookAddr);
+```
+
+## Related Contracts
+
+- [BaseProver](/bridges/overview#common-base-functionality) - Base proving functionality
+- [MessageBridgeProver](/bridges/overview#common-prove-function) - Message bridge base contract
+- [Inbox](/api/inbox) - Intent fulfillment and proving

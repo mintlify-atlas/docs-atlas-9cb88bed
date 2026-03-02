@@ -1,0 +1,156 @@
+---
+title: 'Deployment Overview'
+description: 'Understanding Eco Routes Protocol deployment architecture and considerations'
+---
+
+The Eco Routes Protocol uses deterministic deployment strategies to ensure consistent contract addresses across multiple chains, enabling seamless cross-chain intent fulfillment.
+
+## Deployment Architecture
+
+Eco Routes employs a modular deployment system with the following components:
+
+### Core Contracts
+
+**Portal Contract**
+- Main protocol contract managing intent lifecycle
+- Deployed using CREATE2 for deterministic addresses
+- Handles intent creation, funding, fulfillment, and reward settlement
+- No constructor arguments required
+
+**Prover Contracts**
+- HyperProver (Hyperlane integration)
+- MetaProver (Metalayer integration) 
+- LayerZeroProver (LayerZero integration)
+- PolymerProver (Polymer integration)
+- Deployed using CREATE3 for deterministic addresses
+- Each requires specific bridge contract addresses
+
+### Deployment Tools
+
+**SingletonFactory**
+- CREATE2 factory at `0xce0042B868300000d44A59004Da54A005ffdcf9f`
+- Used for deploying Portal contracts
+- Ensures deterministic addresses across chains
+
+**Create3Deployer**
+- CREATE3 factory at `0xC6BAd1EbAF366288dA6FB5689119eDd695a66814`
+- Used for deploying Prover contracts
+- Allows deterministic addresses independent of bytecode
+- Automatically deployed if not present
+
+## Deployment Strategy
+
+### Deterministic Deployment
+
+All contracts use a `SALT` value for deterministic deployment:
+
+```bash
+# Example SALT from .env.example (version 2.0.1-beta.0)
+SALT=0x88f72b566ae0c96f6fffac4bc8ac74909f61512ac0c06a8124d5ed420d306f90
+```
+
+This ensures:
+- Same contract addresses across all chains
+- Predictable deployment for cross-chain operations
+- Simplified multi-chain configuration
+
+### Modular Prover Deployment
+
+Deployment is conditional based on available bridge contracts:
+
+- **HyperProver**: Deploys only if `MAILBOX_CONTRACT` is set
+- **MetaProver**: Deploys only if `ROUTER_CONTRACT` is set
+- **LayerZeroProver**: Deploys only if `LAYERZERO_ENDPOINT` is set
+- **PolymerProver**: Deploys only if `POLYMER_CROSS_L2_PROVER_V2` is set
+
+### Cross-VM Support
+
+For non-EVM chain integration, provers can be configured with cross-VM addresses:
+
+```bash
+# Cross-VM prover addresses (bytes32 format)
+HYPER_CROSS_VM_PROVERS=0x1234567890abcdef...
+META_CROSS_VM_PROVERS=0x5678901234abcdef...
+LAYERZERO_CROSS_VM_PROVERS=0x9abcdef012345678...
+POLYMER_CROSS_VM_PROVERS=0xdef0123456789abc...
+```
+
+## Deployment Workflow
+
+<Steps>
+  <Step title="Environment Configuration">
+    Configure `.env` file with required variables including RPC URLs, private keys, and bridge contract addresses.
+  </Step>
+  <Step title="Chain Data Setup">
+    Prepare chain configuration JSON with RPC endpoints and bridge contracts for each target chain.
+  </Step>
+  <Step title="Script Execution">
+    Run deployment script which automatically:
+    - Deploys CREATE3 factory if needed
+    - Deploys Portal contract (if not using existing)
+    - Deploys configured Prover contracts
+    - Records deployment addresses to CSV file
+  </Step>
+  <Step title="Verification">
+    Verify deployed contracts on block explorers using verification script.
+  </Step>
+</Steps>
+
+## Deployment Output
+
+Deployments are recorded in a CSV file (default: `out/deploy.csv`):
+
+```csv
+ChainID,ContractAddress,ContractPath,ContractArguments
+1,0x742d35Cc6634C0532925a3b844Bc454e4438f44e,contracts/Portal.sol:Portal,0x
+1,0x8464135c8F25Da09e49BC8782676a84730C318bC,contracts/prover/HyperProver.sol:HyperProver,0x000000...
+```
+
+This file is used for:
+- Tracking deployed addresses
+- Contract verification
+- Cross-chain configuration
+- Deployment auditing
+
+## Special Chain Support
+
+### TRON Networks
+
+The deployment script includes special handling for TRON chains:
+
+- **TRON Mainnet**: Chain ID `728126428`
+- **TRON Shasta**: Chain ID `2494104990`
+- **TRON Nile**: Chain ID `3448148188`
+
+TRON deployments use custom CREATE2 prefix (`0x41`) for address generation.
+
+## Security Considerations
+
+<Warning>
+  **Private Key Security**: Never commit `.env` files containing private keys. Use hardware wallets or secure key management for mainnet deployments.
+</Warning>
+
+### Best Practices
+
+- **Test First**: Always deploy to testnet before mainnet
+- **Verify SALT**: Ensure SALT matches across all deployments
+- **Bridge Addresses**: Double-check bridge contract addresses for each chain
+- **Gas Configuration**: Configure appropriate gas multipliers for congested networks
+- **Verify Contracts**: Always verify deployed contracts on block explorers
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Local Deployment" icon="laptop-code" href="/deployment/local">
+    Deploy and test on local development environment
+  </Card>
+  <Card title="Testnet Deployment" icon="flask" href="/deployment/testnet">
+    Deploy to public testnets for integration testing
+  </Card>
+  <Card title="Mainnet Deployment" icon="rocket" href="/deployment/mainnet">
+    Production deployment to mainnet chains
+  </Card>
+  <Card title="Contract Verification" icon="check-circle" href="/deployment/verification">
+    Verify contracts on block explorers
+  </Card>
+</CardGroup>

@@ -1,0 +1,357 @@
+---
+title: "LocalProver"
+description: "Prover implementation for same-chain intent fulfillment with flash-fulfill capability"
+---
+
+## Overview
+
+`LocalProver` handles proving of intents that are fulfilled on the same chain where they were created. It provides a unique flash-fulfill capability that atomically withdraws rewards, executes fulfillment, and pays the solver.
+
+**Contract:** `contracts/prover/LocalProver.sol`
+
+**Inheritance:** `ILocalProver`, `Semver`, `ReentrancyGuard`
+
+**Proof Type:** `"Same chain"`
+
+<Note>
+  LocalProver is designed for same-chain intents and does not require cross-chain messaging. Proofs are created immediately upon fulfillment.
+</Note>
+
+## Constructor
+
+```solidity
+constructor(address portal)
+```
+
+Initializes the LocalProver contract.
+
+<ParamField path="portal" type="address" required>
+  Address of the Portal contract (provides IntentSource + Inbox functionality)
+</ParamField>
+
+**Errors:**
+- `ChainIdTooLarge(uint256)`: Current chain ID exceeds uint64.max
+
+**Location:** `contracts/prover/LocalProver.sol:43`
+
+## State Variables
+
+### _PORTAL
+
+```solidity
+IPortal private immutable _PORTAL
+```
+
+Address of the Portal contract. Immutable to prevent unauthorized changes.
+
+### _CHAIN_ID
+
+```solidity
+uint64 private immutable _CHAIN_ID
+```
+
+Current chain ID stored as uint64.
+
+### _flashFulfillInProgress
+
+```solidity
+bytes32 private _flashFulfillInProgress
+```
+
+Tracks which intent is currently being flash-fulfilled. Used to enable withdrawal during flashFulfill execution (before Portal.claimants is set). Only one flashFulfill can execute at a time due to nonReentrant modifier.
+
+## Core Functions
+
+### prove
+
+```solidity
+function prove(
+    address /* sender */,
+    uint64 /* sourceChainId */,
+    bytes calldata /* encodedProofs */,
+    bytes calldata /* data */
+) external payable
+```
+
+No-op function for same-chain proving. Proofs are created immediately upon fulfillment, so this function does nothing.
+
+<Warning>
+  This function is payable for compatibility but **does not use ETH**. Any ETH sent to this function will remain in the contract and be distributed to the next flashFulfill caller as part of their reward. **Do not send ETH to this function.**
+</Warning>
+
+**Behavior:**
+- Intentionally empty (no-op)
+- Does not revert to allow usage with fulfillAndProve
+
+**Location:** `contracts/prover/LocalProver.sol:115`
+
+### provenIntents
+
+```solidity
+function provenIntents(
+    bytes32 intentHash
+) public view returns (ProofData memory)
+```
+
+Returns proof data for a given intent hash. For same-chain intents, proofs are created immediately upon fulfillment.
+
+<ParamField path="intentHash" type="bytes32" required>
+  Hash of the intent to query
+</ParamField>
+
+**Returns:** `ProofData` struct with:
+- `claimant` (address): Address eligible for rewards
+- `destination` (uint64): Chain ID (_CHAIN_ID)
+
+**Behavior (4 cases):**
+
+1. **Griefing Protection:** If Portal.claimants contains LocalProver address (without using flashFulfill)
+   - Returns `ProofData(address(0), 0)` to treat intent as unfulfilled
+   - Allows refunds after deadline
+
+2. **Intent Fulfilled:** If Portal.claimants contains valid solver address
+   - Validates address is valid EVM address
+   - Returns `ProofData(solver, _CHAIN_ID)`
+   - If invalid EVM address, returns `ProofData(address(0), 0)` for griefing protection
+
+3. **Flash Fulfill In Progress:** If `_flashFulfillInProgress == intentHash`
+   - Returns `ProofData(address(this), _CHAIN_ID)`
+   - Enables withdrawal to LocalProver during atomic execution
+
+4. **Intent Not Fulfilled:**
+   - Returns `ProofData(address(0), 0)`
+
+**Location:** `contracts/prover/LocalProver.sol:65`
+
+### flashFulfill
+
+```solidity
+function flashFulfill(
+    Route calldata route,
+    Reward calldata reward,
+    bytes32 claimant
+) external payable nonReentrant returns (bytes[] memory results)
+```
+
+Atomically fulfills an intent and pays claimant with remaining funds. This is the primary function for same-chain intent fulfillment.
+
+<ParamField path="route" type="Route" required>
+  Route information for the intent execution
+</ParamField>
+
+<ParamField path="reward" type="Reward" required>
+  Reward details for the intent
+</ParamField>
+
+<ParamField path="claimant" type="bytes32" required>
+  Address of the claimant eligible for rewards (receives immediate payout)
+</ParamField>
+
+**Returns:** `bytes[]` - Results from the fulfill execution
+
+**Execution Flow:**
+
+1. **CHECKS:**
+   - Validates claimant is not zero
+   - Validates claimant is not LocalProver address
+   - Computes intentHash from route and reward
+
+2. **EFFECTS:**
+   - Sets `_flashFulfillInProgress = intentHash`
+
+3. **INTERACTIONS:**
+   - Withdraws reward from vault to LocalProver
+   - Approves Portal to spend route tokens
+   - Calls `Portal.fulfill` with entire contract balance
+   - Portal records actual claimant (not LocalProver)
+
+4. **EFFECTS (Cleanup):**
+   - Transfers all remaining reward tokens to claimant
+   - Transfers all remaining native ETH to claimant
+   - Emits `FlashFulfilled` event
+
+**Claimant Receives:**
+- All ERC20 tokens in reward.tokens (minus any consumed by route.tokens)
+- All native ETH from reward.nativeAmount (minus consumed by route.nativeAmount)
+- Plus any msg.value sent by caller
+
+**Errors:**
+- `InvalidClaimant()`: Claimant is zero or LocalProver address
+- `NativeTransferFailed()`: Native token transfer to claimant failed
+
+**Security:**
+- Uses `nonReentrant` modifier to prevent reentrancy attacks
+- Follows checks-effects-interactions pattern
+
+<Warning>
+  **Front-Running Risk:** This function is permissionless and subject to front-running. Any solver can call this function for any intent and specify themselves as the claimant. Solvers should use private transaction pools (e.g., Flashbots) or coordinate off-chain with intent creators to mitigate front-running risks. This is standard MEV behavior in intent-based systems.
+</Warning>
+
+**Location:** `contracts/prover/LocalProver.sol:170`
+
+### challengeIntentProof
+
+```solidity
+function challengeIntentProof(
+    uint64 /* destination */,
+    bytes32 /* routeHash */,
+    bytes32 /* rewardHash */
+) external pure
+```
+
+No-op function for same-chain intents. Same-chain intents cannot be challenged.
+
+**Behavior:**
+- Intentionally empty (no-op)
+
+**Location:** `contracts/prover/LocalProver.sol:131`
+
+### getProofType
+
+```solidity
+function getProofType() external pure returns (string memory)
+```
+
+**Returns:** `"Same chain"`
+
+**Location:** `contracts/prover/LocalProver.sol:104`
+
+### receive
+
+```solidity
+receive() external payable
+```
+
+Allows contract to receive native tokens. Required for vault withdrawals that include native rewards.
+
+**Location:** `contracts/prover/LocalProver.sol:242`
+
+## Events
+
+### FlashFulfilled
+
+```solidity
+event FlashFulfilled(
+    bytes32 indexed intentHash,
+    bytes32 claimant,
+    uint256 remainingNative
+)
+```
+
+Emitted when an intent is successfully flash-fulfilled.
+
+<ParamField path="intentHash" type="bytes32">
+  Hash of the fulfilled intent
+</ParamField>
+
+<ParamField path="claimant" type="bytes32">
+  Address that received the rewards
+</ParamField>
+
+<ParamField path="remainingNative" type="uint256">
+  Amount of native tokens transferred to claimant
+</ParamField>
+
+## Errors
+
+### InvalidClaimant
+
+```solidity
+error InvalidClaimant()
+```
+
+Thrown when claimant is zero address or LocalProver address.
+
+### NativeTransferFailed
+
+```solidity
+error NativeTransferFailed()
+```
+
+Thrown when native token transfer to claimant fails.
+
+### ChainIdTooLarge
+
+```solidity
+error ChainIdTooLarge(uint256 chainId)
+```
+
+Thrown when current chain ID exceeds uint64.max.
+
+## Usage Example
+
+### Flash Fulfill an Intent
+
+```solidity
+// Prepare route and reward data
+Route memory route = Route({
+    steps: [...],
+    tokens: [...]
+});
+
+Reward memory reward = Reward({
+    creator: intentCreator,
+    prover: address(localProver),
+    deadline: block.timestamp + 1 hours,
+    nativeAmount: 0.1 ether,
+    tokens: [TokenAmount(rewardToken, 1000e18)]
+});
+
+// Flash fulfill (solver specifies themselves as claimant)
+bytes32 claimant = bytes32(uint256(uint160(msg.sender)));
+bytes[] memory results = localProver.flashFulfill{value: routeNativeAmount}(
+    route,
+    reward,
+    claimant
+);
+
+// Solver receives:
+// - All reward tokens (minus consumed by route)
+// - All reward native (minus consumed by route)
+// - Immediately, in single transaction
+```
+
+### Check Proof Status
+
+```solidity
+// Query proof data
+IProver.ProofData memory proof = localProver.provenIntents(intentHash);
+
+if (proof.claimant != address(0)) {
+    // Intent is proven and fulfilled
+    // proof.claimant is the solver
+    // proof.destination is the current chain
+} else {
+    // Intent not yet fulfilled
+}
+```
+
+## Griefing Protection
+
+LocalProver includes protection against griefing attacks:
+
+1. **LocalProver as Claimant:** If someone calls `Portal.fulfill` with LocalProver as claimant (without using flashFulfill), `provenIntents` returns `address(0)` to treat the intent as unfulfilled.
+
+2. **Invalid EVM Address:** If Portal.claimants contains a non-EVM bytes32 value, `provenIntents` returns `address(0)` to allow refunds.
+
+These protections ensure intent creators can always get refunds after deadline if something goes wrong.
+
+## Flash Fulfill Atomicity
+
+The flash fulfill mechanism provides atomic execution:
+
+1. Withdraw rewards from vault → LocalProver
+2. Approve Portal to spend route tokens
+3. Call Portal.fulfill (which executes route steps)
+4. Transfer remaining rewards → claimant
+
+All in a single transaction. If any step fails, entire transaction reverts.
+
+## Reentrancy Protection
+
+The `nonReentrant` modifier prevents:
+- Multiple simultaneous flash fulfills
+- Cross-intent reentrancy attacks
+- State manipulation during execution
+
+Only one `flashFulfill` can execute at a time.

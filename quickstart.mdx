@@ -1,80 +1,237 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with Eco Routes in minutes
 ---
 
-## Get started in three steps
+# Quickstart
 
-Get your documentation site running locally and make your first customization.
+This guide will help you set up your development environment and create your first cross-chain intent with Eco Routes.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+Before you begin, ensure you have the following installed:
 
-### Step 2: Deploy your changes
+<Steps>
+  <Step title="Install Node.js">
+    Install Node Version Manager (nvm) and Node.js v18.20.3:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```bash
+    # Install nvm
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    # Install and use Node.js v18.20.3
+    nvm install v18.20.3
+    nvm use v18.20.3
+    ```
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Install Yarn">
+    Install Yarn package manager:
 
-### Step 3: Go live
+    ```bash
+    npm install -g yarn@1.22.19
+    ```
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Install Foundry">
+    Install Foundry for smart contract development:
+
+    ```bash
+    curl -L https://foundry.paradigm.xyz | bash
+    foundryup
+    ```
+
+    <Info>
+      Hardhat is also supported as an alternative to Foundry.
+    </Info>
+  </Step>
+</Steps>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/eco/eco-routes.git
+    cd eco-routes
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash
+    yarn install
+    ```
+  </Step>
+
+  <Step title="Build the project">
+    ```bash
+    yarn build
+    ```
+  </Step>
+</Steps>
+
+## Create your first intent
+
+Let's create a simple cross-chain intent that transfers tokens from one chain to another.
+
+### Understanding the intent structure
+
+An intent consists of three main components:
+
+1. **Destination**: The target chain ID where the intent will be executed
+2. **Route**: The execution instructions (calls to make, tokens needed, deadline)
+3. **Reward**: The incentives for solvers (reward tokens, deadline, prover address)
+
+### Example: Token transfer intent
+
+Here's how to create and fund an intent:
+
+```solidity
+import {Portal} from "./contracts/Portal.sol";
+import {Intent, Route, Reward, TokenAmount, Call} from "./contracts/types/Intent.sol";
+
+// Initialize the Portal contract
+Portal portal = Portal(portalAddress);
+
+// Define the route - what should happen on the destination chain
+Route memory route = Route({
+    salt: keccak256("unique-intent-id"),
+    deadline: uint64(block.timestamp + 1 hours),
+    portal: destinationPortalAddress,
+    nativeAmount: 0.1 ether,
+    tokens: new TokenAmount[](1),
+    calls: new Call[](1)
+});
+
+// Specify input tokens needed on destination chain
+route.tokens[0] = TokenAmount({
+    token: address(usdcToken),
+    amount: 1000e6  // 1000 USDC
+});
+
+// Define the call to execute on destination chain
+route.calls[0] = Call({
+    target: recipientAddress,
+    data: abi.encodeWithSignature(
+        "transfer(address,uint256)",
+        recipientAddress,
+        1000e6
+    ),
+    value: 0
+});
+
+// Define the reward for the solver
+Reward memory reward = Reward({
+    deadline: uint64(block.timestamp + 1 hours),
+    creator: msg.sender,
+    prover: hyperProverAddress,
+    nativeAmount: 0.01 ether,  // 0.01 ETH reward
+    tokens: new TokenAmount[](0)
+});
+
+// Create the complete intent
+Intent memory intent = Intent({
+    destination: 42161,  // Arbitrum chain ID
+    route: route,
+    reward: reward
+});
+
+// Publish and fund the intent in one transaction
+(bytes32 intentHash, address vault) = portal.publishAndFund{value: 0.11 ether}(
+    intent,
+    false  // allowPartial = false (must be fully funded)
+);
+```
+
+### Checking intent status
+
+You can check if an intent is funded:
+
+```solidity
+bool isFunded = portal.isIntentFunded(intent);
+```
+
+Get the vault address for an intent:
+
+```solidity
+address vault = portal.intentVaultAddress(intent);
+```
+
+Check the reward status:
+
+```solidity
+IIntentSource.Status status = portal.getRewardStatus(intentHash);
+// Status can be: Initial, Funded, Withdrawn, or Refunded
+```
+
+## Fulfilling an intent (Solver perspective)
+
+Solvers execute intents on the destination chain:
+
+```solidity
+// On the destination chain
+Portal destinationPortal = Portal(destinationPortalAddress);
+
+// Approve tokens for the portal
+usdc.approve(address(destinationPortal), 1000e6);
+
+// Fulfill the intent
+bytes32 claimant = bytes32(uint256(uint160(solverAddress)));
+
+bytes[] memory results = destinationPortal.fulfill{value: 0.1 ether}(
+    intentHash,
+    route,
+    rewardHash,
+    claimant
+);
+```
+
+<Note>
+  The `claimant` is a bytes32 representation of the address that will claim rewards. This format enables cross-VM compatibility.
+</Note>
+
+## Proving and withdrawing rewards
+
+After fulfillment, the intent must be proven on the source chain:
+
+```solidity
+// The prover sends proof back to source chain
+// This is typically handled automatically by prover infrastructure
+
+// Once proven, solver withdraws rewards on source chain
+portal.withdraw(
+    intent.destination,
+    routeHash,
+    reward
+);
+```
+
+## Testing your integration
+
+Run the test suite to verify your setup:
+
+```bash
+# Run all tests
+yarn test
+
+# Run specific test file
+forge test --match-contract Portal
+
+# Run with verbose output
+forge test -vvv
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Architecture" icon="diagram-project" href="/architecture">
+    Learn how the Portal, Inbox, and Provers work together
+  </Card>
+  <Card title="Core concepts" icon="book" href="/concepts/intents">
+    Understand intents, vaults, and the protocol lifecycle
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+<Warning>
+  Always test your intents on testnet before deploying to mainnet. Ensure you understand the security implications of the calls you're making.
+</Warning>

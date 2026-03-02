@@ -1,0 +1,418 @@
+---
+title: 'Cross-VM Support'
+description: 'Address conversion and cross-chain compatibility between EVM and non-EVM chains'
+icon: 'code-branch'
+---
+
+## Overview
+
+Eco Routes Protocol supports cross-chain intents between different virtual machine architectures, including EVM-to-EVM, EVM-to-Solana, and other combinations. This requires careful handling of address formats across different chain types.
+
+## Address Formats
+
+### EVM Addresses (20 bytes)
+
+```solidity
+address user = 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb;
+// 20 bytes = 160 bits
+```
+
+### Solana Addresses (32 bytes)
+
+```rust
+pubkey: Pubkey = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
+// 32 bytes = 256 bits (base58 encoded)
+```
+
+### Universal Format (bytes32)
+
+The protocol uses `bytes32` as a universal address format:
+
+```solidity
+// From BaseDepositAddress.sol:20-21
+/// @notice User's destination address on target chain
+/// @dev bytes32 for universal chain compatibility (supports both EVM and non-EVM chains)
+bytes32 public destinationAddress;
+```
+
+## AddressConverter Library
+
+The `AddressConverter` library provides safe conversion between EVM addresses and the universal `bytes32` format.
+
+### Converting Address to Bytes32
+
+```solidity
+// From AddressConverter.sol:13-21
+/**
+ * @notice Convert an Ethereum address to bytes32
+ * @dev Pads the 20-byte address to 32 bytes by converting to uint160, then uint256, then bytes32
+ * @param addr The address to convert
+ * @return The bytes32 representation of the address
+ */
+function toBytes32(address addr) internal pure returns (bytes32) {
+    return bytes32(uint256(uint160(addr)));
+}
+```
+
+**How it works:**
+
+```
+Original address:  0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb (20 bytes)
+                   ↓
+Step 1: uint160:   0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
+                   ↓
+Step 2: uint256:   0x000000000000000000000000742d35Cc6634C0532925a3b844Bc9e7595f0bEb
+                   ↓
+Step 3: bytes32:   0x000000000000000000000000742d35cc6634c0532925a3b844bc9e7595f0beb
+                   (padded with 12 zero bytes on the left)
+```
+
+### Converting Bytes32 to Address
+
+```solidity
+// From AddressConverter.sol:23-35
+/**
+ * @notice Convert bytes32 to an Ethereum address
+ * @dev Truncates the 32-byte value to 20 bytes by converting to uint256, then uint160, then address
+ * @param b The bytes32 value to convert
+ * @return The address representation of the bytes32 value
+ */
+function toAddress(bytes32 b) internal pure returns (address) {
+    if (!isValidAddress(b)) {
+        revert InvalidAddress(b);
+    }
+    
+    return address(uint160(uint256(b)));
+}
+```
+
+**How it works:**
+
+```
+Original bytes32:  0x000000000000000000000000742d35cc6634c0532925a3b844bc9e7595f0beb
+                   ↓
+Step 1: uint256:   0x000000000000000000000000742d35cc6634c0532925a3b844bc9e7595f0beb
+                   ↓
+Step 2: uint160:   0x742d35cc6634c0532925a3b844bc9e7595f0beb (truncate top 12 bytes)
+                   ↓
+Step 3: address:   0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
+```
+
+### Validation
+
+<Warning>
+**Critical**: Not all `bytes32` values represent valid Ethereum addresses. The top 12 bytes **must** be zero.
+</Warning>
+
+```solidity
+// From AddressConverter.sol:37-46
+/**
+ * @notice Check if a bytes32 value represents a valid Ethereum address
+ * @dev An Ethereum address must have the top 12 bytes as zero
+ * @param b The bytes32 value to check
+ * @return True if the bytes32 value can be safely converted to an Ethereum address
+ */
+function isValidAddress(bytes32 b) internal pure returns (bool) {
+    // The top 12 bytes must be zero for a valid Ethereum address
+    return uint256(b) >> 160 == 0;
+}
+```
+
+**Example validation:**
+
+```solidity
+// Valid EVM address (top 12 bytes are zero)
+bytes32 valid = 0x000000000000000000000000742d35cc6634c0532925a3b844bc9e7595f0beb;
+isValidAddress(valid);  // ✅ true
+
+// Invalid - top bytes not zero (Solana pubkey)
+bytes32 invalid = 0x742d35cc6634c0532925a3b844bc9e7595f0beb9f7e2d3a1c5b8e4f6a2d8c1e3;
+isValidAddress(invalid);  // ❌ false
+
+// Attempting conversion will revert
+toAddress(invalid);  // ❌ Reverts with InvalidAddress
+```
+
+## Usage in IntentSource
+
+The `IntentSource` contract uses `AddressConverter` throughout:
+
+```solidity
+// From IntentSource.sol:29
+using AddressConverter for address;
+
+// Example: Converting reward creator to bytes32
+function publishIntent(
+    Intent calldata intent
+) external {
+    // When emitting events or encoding data cross-chain,
+    // addresses are converted to bytes32
+    bytes32 creatorBytes = intent.reward.creator.toBytes32();
+    // ...
+}
+```
+
+## Cross-Chain Address Handling
+
+### EVM → EVM
+
+When both source and destination are EVM chains:
+
+```solidity
+// User provides EVM address
+address destinationEVM = 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb;
+
+// Convert to universal format
+bytes32 destinationUniversal = destinationEVM.toBytes32();
+// = 0x000000000000000000000000742d35cc6634c0532925a3b844bc9e7595f0beb
+
+// On destination chain, convert back
+address recipient = destinationUniversal.toAddress();
+// = 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb ✅
+```
+
+### EVM → Solana
+
+When destination is Solana (or another non-EVM chain):
+
+```solidity
+// User provides Solana pubkey (as bytes32)
+bytes32 destinationSolana = 0x742d35cc6634c0532925a3b844bc9e7595f0beb9f7e2d3a1c5b8e4f6a2d8c1e3;
+
+// ❌ This is NOT a valid EVM address
+isValidAddress(destinationSolana);  // false
+
+// ✅ But it's a valid bytes32, so it can be used directly
+Intent memory intent = Intent({
+    destination: SOLANA_CHAIN_ID,
+    route: Route({
+        recipient: destinationSolana,  // Used as-is
+        // ...
+    }),
+    // ...
+});
+```
+
+### Solana → EVM
+
+When source is Solana and destination is EVM:
+
+```rust
+// On Solana: user provides EVM address
+let destination_evm: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 12 zero bytes
+    0x74, 0x2d, 0x35, 0xcc, 0x66, 0x34, 0xc0, 0x53,
+    0x29, 0x25, 0xa3, 0xb8, 0x44, 0xbc, 0x9e, 0x75,
+    0x95, 0xf0, 0xbe, 0xb
+];
+
+// Intent is fulfilled on EVM chain
+// Solidity validates and converts:
+address recipient = AddressConverter.toAddress(destination_evm);
+// = 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb ✅
+```
+
+## CREATE2 and Cross-VM
+
+### Standard CREATE2 Prefix
+
+On most EVM chains, CREATE2 uses prefix `0xff`:
+
+```solidity
+// From IntentSource.sol:33-56
+/// @dev CREATE2 prefix for deterministic address calculation
+bytes1 private immutable CREATE2_PREFIX;
+
+constructor() {
+    CREATE2_PREFIX = block.chainid == TRON_MAINNET_CHAIN_ID ||
+                     block.chainid == TRON_TESTNET_CHAIN_ID
+        ? bytes1(0x41)  // TRON chain custom CREATE2 prefix
+        : bytes1(0xff); // Standard EVM prefix
+    
+    VAULT_IMPLEMENTATION = address(new Vault());
+}
+```
+
+### TRON Exception
+
+<Note>
+**TRON Uses 0x41**: TRON is an EVM-compatible chain but uses a different CREATE2 prefix for historical reasons.
+</Note>
+
+```solidity
+// From Clones.sol:36-68
+function predict(
+    address implementation,
+    bytes32 salt,
+    bytes1 prefix
+) internal view returns (address predicted) {
+    predicted = address(
+        uint160(
+            uint256(
+                keccak256(
+                    abi.encodePacked(
+                        prefix,              // 0xff (standard) or 0x41 (TRON)
+                        address(this),       // Deployer address
+                        salt,                // Unique salt
+                        keccak256(
+                            abi.encodePacked(
+                                type(Proxy).creationCode,
+                                abi.encode(implementation)
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    );
+}
+```
+
+## Practical Examples
+
+### Example 1: EVM Deposit Address
+
+```solidity
+// User wants to bridge from Ethereum to Arbitrum (both EVM)
+address userAddressArbitrum = 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb;
+
+// Factory converts to bytes32 for storage
+bytes32 destinationBytes = userAddressArbitrum.toBytes32();
+
+// Get deposit address
+address depositAddr = factory.getDepositAddress(
+    userAddressArbitrum,
+    msg.sender  // depositor
+);
+
+// User sends USDC to depositAddr
+// ...
+
+// On Arbitrum, solver fulfills intent
+bytes32 recipientBytes = route.recipient;  // bytes32 from intent
+address recipient = recipientBytes.toAddress();  // ✅ converts back to address
+USDC.transfer(recipient, amount);
+```
+
+### Example 2: Solana Deposit Address
+
+```solidity
+// User wants to bridge from Ethereum to Solana
+// User provides their Solana Associated Token Account (ATA) as bytes32
+bytes32 solanaATA = 0x9c2e1f3b8a7d6e5c4f2a8b9e1d3c7a6f5e4b2d8c1a9f7e6d5c4b3a2f1e8d7c6b;
+
+// ❌ Cannot convert to address (not a valid EVM address)
+// AddressConverter.toAddress(solanaATA);  // Would revert!
+
+// ✅ But can use as bytes32 directly
+Intent memory intent = Intent({
+    destination: SOLANA_CHAIN_ID,
+    route: Route({
+        recipient: solanaATA,  // Used directly as bytes32
+        // ...
+    }),
+    // ...
+});
+```
+
+### Example 3: Validation in Smart Contracts
+
+```solidity
+contract CrossChainBridge {
+    using AddressConverter for bytes32;
+    
+    function bridgeToEVM(
+        bytes32 recipient,
+        uint256 amount
+    ) external {
+        // Validate recipient is a valid EVM address
+        if (!AddressConverter.isValidAddress(recipient)) {
+            revert InvalidEVMAddress(recipient);
+        }
+        
+        address recipientAddr = recipient.toAddress();
+        IERC20(token).transfer(recipientAddr, amount);
+    }
+    
+    function bridgeToSolana(
+        bytes32 solanaAddress,
+        uint256 amount
+    ) external {
+        // No validation needed - any bytes32 is valid for Solana
+        // (Solana program will validate on destination)
+        
+        // Create intent with solanaAddress as recipient
+        // ...
+    }
+}
+```
+
+## Security Considerations
+
+<Warning>
+**Always Validate**: When converting `bytes32` to `address`, always use `AddressConverter.toAddress()` which includes validation. Never cast directly.
+</Warning>
+
+### Safe Conversion
+
+```solidity
+// ✅ SAFE - includes validation
+address recipient = AddressConverter.toAddress(recipientBytes);
+
+// ❌ UNSAFE - no validation
+address recipient = address(uint160(uint256(recipientBytes)));
+```
+
+### Type Safety
+
+The library provides compile-time type safety:
+
+```solidity
+// ✅ Explicit conversion functions
+bytes32 b = addr.toBytes32();
+address a = b.toAddress();
+
+// ❌ Would require unsafe casting
+bytes32 b = bytes32(uint256(uint160(addr)));  // Error-prone
+```
+
+<Accordion title="Why use bytes32 instead of separate types?">
+Using `bytes32` as a universal format provides:
+- **Simplicity**: One type for all chains
+- **Gas efficiency**: No complex encoding/decoding
+- **Forward compatibility**: Works with future chain types
+- **Storage efficiency**: Fixed 32-byte slots
+</Accordion>
+
+<Accordion title="Can I use checksummed addresses?">
+Yes! Checksumming is a display-level feature (mixed case). The underlying bytes are identical:
+
+```solidity
+address a1 = 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb;  // Checksummed
+address a2 = 0x742d35cc6634c0532925a3b844bc9e7595f0beb;  // Lowercase
+a1 == a2;  // ✅ true - same address
+```
+</Accordion>
+
+<Accordion title="What about ENS names?">
+ENS names must be resolved to addresses **before** being used in intents:
+
+```javascript
+// Resolve ENS name first
+const address = await provider.resolveName('vitalik.eth');
+const bytes32Addr = ethers.utils.hexZeroPad(address, 32);
+
+// Now use bytes32Addr in intent
+```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deposit Addresses" icon="inbox" href="/advanced/deposit-addresses">
+    Learn how deposit addresses leverage cross-VM support
+  </Card>
+  <Card title="Deterministic Addresses" icon="fingerprint" href="/advanced/deterministic-addresses">
+    Understand CREATE2 deployment across different chains
+  </Card>
+</CardGroup>

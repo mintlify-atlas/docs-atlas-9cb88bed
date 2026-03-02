@@ -1,0 +1,435 @@
+---
+title: "Cross-Chain Compatibility"
+description: "Understanding EVM and cross-VM support in the Eco Routes Protocol"
+---
+
+## Overview
+
+The Eco Routes Protocol is designed to support both EVM chains (Ethereum, Polygon, Arbitrum, etc.) and non-EVM chains (Solana, Sui, etc.) through a flexible type system and modular architecture.
+
+## Dual-Type System
+
+The protocol supports two parallel type systems to accommodate different blockchain architectures:
+
+### EVM Intent Types
+
+Optimized for Ethereum Virtual Machine chains using native `address` types (20 bytes):
+
+```solidity contracts/types/Intent.sol
+struct Call {
+    address target;      // 20-byte EVM address
+    bytes data;
+    uint256 value;
+}
+
+struct TokenAmount {
+    address token;       // 20-byte ERC20 address
+    uint256 amount;
+}
+
+struct Route {
+    bytes32 salt;
+    uint64 deadline;
+    address portal;      // 20-byte portal address
+    uint256 nativeAmount;
+    TokenAmount[] tokens;
+    Call[] calls;
+}
+
+struct Reward {
+    uint64 deadline;
+    address creator;     // 20-byte creator address
+    address prover;      // 20-byte prover address
+    uint256 nativeAmount;
+    TokenAmount[] tokens;
+}
+```
+
+**Benefits:**
+- Familiar to Solidity developers
+- Gas-efficient on EVM chains
+- Native tooling support
+- Type safety for EVM addresses
+
+### Universal Intent Types
+
+Designed for cross-VM compatibility using `bytes32` for address identifiers:
+
+```solidity
+// Same struct names, different address representation
+struct Route {
+    bytes32 salt;
+    uint64 deadline;
+    bytes32 portal;      // 32-byte universal identifier
+    uint256 nativeAmount;
+    TokenAmount[] tokens;
+    Call[] calls;
+}
+
+struct Reward {
+    uint64 deadline;
+    bytes32 creator;     // 32-byte universal identifier
+    bytes32 prover;      // 32-byte universal identifier
+    uint256 nativeAmount;
+    TokenAmount[] tokens;
+}
+```
+
+**Benefits:**
+- Compatible with non-EVM chains (Solana, Sui, etc.)
+- Unified cross-chain addressing
+- Future-proof for new blockchain architectures
+- Same struct names simplify integration
+
+## bytes32 vs address Types
+
+### Technical Design
+
+The dual-type approach leverages EVM's ABI encoding:
+
+```solidity
+// EVM addresses are 20 bytes
+address evmAddress = 0x1234567890123456789012345678901234567890;
+
+// When ABI-encoded, addresses are padded to 32 bytes
+// Encoding: 0x000000000000000000000000{20-byte address}
+
+// bytes32 exactly matches this encoding pattern
+bytes32 universalId = bytes32(uint256(uint160(evmAddress)));
+```
+
+**Key insight**: The `bytes32` type can represent both:
+- EVM addresses (with zero-padding)
+- Non-EVM identifiers (using full 32 bytes)
+
+This allows both type systems to be **interchangeable at the binary level**.
+
+### Claimant Identifiers
+
+The protocol uses `bytes32` for claimant identifiers to support cross-VM reward distribution:
+
+```solidity contracts/Inbox.sol
+mapping(bytes32 => bytes32) public claimants;
+
+function fulfill(
+    bytes32 intentHash,
+    Route memory route,
+    bytes32 rewardHash,
+    bytes32 claimant  // Universal claimant identifier
+) external payable returns (bytes[] memory)
+```
+
+**On fulfillment:**
+- EVM solver: Converts their address to `bytes32`
+- Non-EVM solver: Provides their native identifier as `bytes32`
+
+**On withdrawal:**
+- Prover converts `bytes32` claimant back to the appropriate address type
+- Rewards distributed using the native address format
+
+## Type Conversion
+
+The protocol includes the `AddressConverter` library for converting between types:
+
+```solidity contracts/libs/AddressConverter.sol
+library AddressConverter {
+    // Convert EVM address to universal bytes32
+    function toBytes32(address addr) internal pure returns (bytes32) {
+        return bytes32(uint256(uint160(addr)));
+    }
+
+    // Convert universal bytes32 to EVM address
+    function toAddress(bytes32 id) internal pure returns (address) {
+        return address(uint160(uint256(id)));
+    }
+}
+```
+
+**Usage example:**
+
+```solidity
+import {AddressConverter} from "./libs/AddressConverter.sol";
+
+using AddressConverter for address;
+using AddressConverter for bytes32;
+
+// Convert address to bytes32
+address solver = msg.sender;
+bytes32 claimant = solver.toBytes32();
+
+// Convert bytes32 to address
+bytes32 storedClaimant = claimants[intentHash];
+address recipient = storedClaimant.toAddress();
+```
+
+<Note>
+When converting from `bytes32` to `address`, the upper 12 bytes must be zero for valid EVM addresses. The conversion extracts only the lower 20 bytes.
+</Note>
+
+## Modular Contract Structure
+
+The protocol uses inheritance to separate EVM-specific and universal functionality:
+
+```
+Portal
+├── IntentSource (EVM-specific intent operations)
+│   ├── Uses address types for creators, provers
+│   ├── Manages reward claiming and refunding
+│   └── Handles vault interactions
+└── Inbox (universal fulfillment functionality)
+    ├── Uses bytes32 for claimant identifiers
+    ├── Accepts Route with address or bytes32 portal
+    └── Stores fulfillment in universal format
+```
+
+### Source Chain (IntentSource)
+
+**EVM-specific operations:**
+
+```solidity contracts/IntentSource.sol
+function publish(
+    Intent calldata intent  // Uses address types
+) public returns (bytes32 intentHash, address vault)
+
+function withdraw(
+    uint64 destination,
+    bytes32 routeHash,
+    Reward calldata reward  // reward.creator, reward.prover are addresses
+) public
+```
+
+**Universal format support:**
+
+```solidity contracts/IntentSource.sol
+function publish(
+    uint64 destination,
+    bytes memory route,      // Encoded route as bytes
+    Reward memory reward
+) public returns (bytes32 intentHash, address vault)
+```
+
+- Accepts route as `bytes` for cross-VM compatibility
+- Computes hash from encoded bytes: `keccak256(route)`
+- Allows non-EVM chains to create intents via encoding
+
+### Destination Chain (Inbox)
+
+**Universal fulfillment:**
+
+```solidity contracts/Inbox.sol
+function fulfill(
+    bytes32 intentHash,
+    Route memory route,      // Can use address or bytes32 for portal
+    bytes32 rewardHash,
+    bytes32 claimant         // Universal identifier
+) external payable returns (bytes[] memory)
+```
+
+**Claimant storage:**
+
+```solidity contracts/Inbox.sol
+claimants[intentHash] = claimant;
+```
+
+Stores claimant as `bytes32`, enabling:
+- EVM addresses (converted to bytes32)
+- Solana public keys (native bytes32)
+- Any other 32-byte identifier
+
+## Cross-Chain Prover Support
+
+Provers handle the conversion between universal and EVM-specific types:
+
+```solidity
+interface IProver {
+    struct ProofData {
+        uint64 destination;   // Destination chain ID
+        address claimant;     // EVM address for reward recipient
+    }
+
+    function provenIntents(bytes32 intentHash) 
+        external view returns (ProofData memory);
+}
+```
+
+**Prover responsibility:**
+
+1. Receive `bytes32` claimant from destination chain
+2. Convert to `address` for EVM source chain storage
+3. Store proof with converted address
+4. Enable withdrawal to EVM address
+
+**Conversion in withdraw:**
+
+```solidity contracts/IntentSource.sol
+IProver.ProofData memory proof = IProver(reward.prover).provenIntents(
+    intentHash
+);
+address claimant = proof.claimant;  // Already converted by prover
+
+vault.withdraw(reward, claimant);   // Transfer to EVM address
+```
+
+<Info>
+Provers act as the bridge between universal `bytes32` identifiers on destination chains and EVM `address` types on source chains.
+</Info>
+
+## Integration Guidelines
+
+### For EVM-Only Applications
+
+If your application only interacts with EVM chains:
+
+```solidity
+import {Intent, Route, Reward} from "./types/Intent.sol";
+
+// Create intent with familiar address types
+Intent memory intent = Intent({
+    destination: 137,  // Polygon
+    route: Route({
+        salt: bytes32(0),
+        deadline: block.timestamp + 86400,
+        portal: 0x1234...,  // Portal address
+        nativeAmount: 0,
+        tokens: tokenAmounts,
+        calls: calls
+    }),
+    reward: Reward({
+        deadline: block.timestamp + 86400,
+        creator: msg.sender,
+        prover: 0x5678...,  // Prover address
+        nativeAmount: 1 ether,
+        tokens: rewardTokens
+    })
+});
+
+// Publish using EVM interface
+IIntentSource(portal).publishAndFund(intent, false);
+```
+
+### For Cross-VM Applications
+
+If your application needs to support non-EVM chains:
+
+```solidity
+import {Intent, Route, Reward} from "./types/Intent.sol";
+import {AddressConverter} from "./libs/AddressConverter.sol";
+
+using AddressConverter for address;
+
+// Create intent with bytes32 identifiers
+Intent memory intent = Intent({
+    destination: 1399811149,  // Solana Mainnet
+    route: Route({
+        salt: bytes32(0),
+        deadline: block.timestamp + 86400,
+        portal: bytes32(0x1234...),  // Solana program ID
+        nativeAmount: 0,
+        tokens: tokenAmounts,
+        calls: calls
+    }),
+    reward: Reward({
+        deadline: block.timestamp + 86400,
+        creator: msg.sender.toBytes32(),  // Convert to bytes32
+        prover: proverAddress.toBytes32(),
+        nativeAmount: 1 ether,
+        tokens: rewardTokens
+    })
+});
+
+// Publish using universal interface
+IIntentSource(portal).publish(
+    intent.destination,
+    abi.encode(intent.route),  // Encode route as bytes
+    intent.reward
+);
+```
+
+**As a solver on Solana:**
+
+```rust
+// Fulfill intent and provide Solana public key as claimant
+let claimant: [u8; 32] = solver_pubkey.to_bytes();
+
+// This claimant identifier will be:
+// 1. Stored in Inbox.claimants mapping
+// 2. Sent to prover via cross-chain message
+// 3. Converted to EVM address by prover (if possible)
+// 4. Used for reward distribution on source chain
+```
+
+## Chain ID Considerations
+
+The protocol uses `uint64` for chain IDs to support both EVM and non-EVM chains:
+
+```solidity contracts/Inbox.sol
+uint64 private immutable CHAIN_ID;
+
+constructor() {
+    if (block.chainid > type(uint64).max) {
+        revert ChainIdTooLarge(block.chainid);
+    }
+    CHAIN_ID = uint64(block.chainid);
+}
+```
+
+**Examples:**
+- Ethereum Mainnet: `1`
+- Polygon: `137`
+- Arbitrum One: `42161`
+- Solana Mainnet: `1399811149`
+- Sui Mainnet: `101`
+
+<Note>
+The destination chain ID must fit within a `uint64`. Most major chains, including Solana and Sui, use chain IDs that fit within this range.
+</Note>
+
+## CREATE2 Prefix Support
+
+The protocol adapts to different CREATE2 implementations:
+
+```solidity contracts/IntentSource.sol
+bytes1 private immutable CREATE2_PREFIX;
+
+uint256 private immutable TRON_MAINNET_CHAIN_ID = 728126428;
+uint256 private immutable TRON_TESTNET_CHAIN_ID = 2494104990;
+
+constructor() {
+    // TRON support
+    CREATE2_PREFIX = block.chainid == TRON_MAINNET_CHAIN_ID ||
+        block.chainid == TRON_TESTNET_CHAIN_ID
+        ? bytes1(0x41)  // TRON chain custom CREATE2 prefix
+        : bytes1(0xff); // Standard EVM CREATE2 prefix
+
+    VAULT_IMPLEMENTATION = address(new Vault());
+}
+```
+
+**Vault address calculation:**
+
+```solidity
+function _getVault(bytes32 intentHash) internal view returns (address) {
+    return VAULT_IMPLEMENTATION.predict(intentHash, CREATE2_PREFIX);
+}
+```
+
+This ensures deterministic vault addresses across different EVM implementations:
+- **Standard EVM** (Ethereum, Polygon, etc.): `0xff` prefix
+- **TRON**: `0x41` prefix
+
+## Best Practices
+
+<Info>
+**Recommendations for protocol integrators:**
+
+1. **Use the universal types** (`bytes32`-based) for core protocol interactions if you need cross-VM support
+2. **Use EVM-specific types** for user-facing interfaces on EVM chains
+3. **Convert at the boundaries** of your application using `AddressConverter`
+4. **Test conversions** thoroughly, especially bytes32 ↔ address transformations
+5. **Document which format** your interface expects (EVM address vs. bytes32 identifier)
+6. **Validate identifiers** before conversion to avoid truncation errors
+</Info>
+
+<Note>
+Remember: Reward claiming is always EVM-specific on the source chain, even if the intent was fulfilled on a non-EVM destination chain. Provers must convert universal identifiers to EVM addresses.
+</Note>

@@ -1,0 +1,542 @@
+---
+title: Encoding Utilities
+description: Utilities for encoding intents, routes, and function calls
+---
+
+The Eco Routes Protocol provides comprehensive encoding utilities for creating and hashing intents, routes, rewards, and standard contract function calls.
+
+## Intent Encoding
+
+Utilities for encoding and hashing intent-related data structures.
+
+### encodeRoute
+
+Encodes a route object into ABI-encoded bytes for on-chain processing.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    function encodeRoute(route: Route): string
+    ```
+
+    **Parameters:**
+    - `route`: Route object containing execution details
+
+    **Returns:** ABI-encoded route data as hex string
+
+    **Example:**
+    ```typescript
+    import { encodeRoute } from './utils/intent'
+
+    const route = {
+      salt: '0x' + '0'.repeat(64), // bytes32
+      deadline: 1700000000,
+      portal: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
+      nativeAmount: 1000000000000000000n, // 1 ETH
+      tokens: [
+        { 
+          token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC
+          amount: 1000000n // 1 USDC
+        }
+      ],
+      calls: [
+        { 
+          target: '0xSwapRouter...', 
+          data: '0x...', // Encoded swap call
+          value: 0 
+        }
+      ]
+    }
+
+    const encodedRoute = encodeRoute(route)
+    console.log('Encoded route:', encodedRoute)
+    ```
+  </Tab>
+  <Tab title="Structure">
+    ```solidity
+    struct Route {
+        bytes32 salt;
+        uint64 deadline;
+        address portal;
+        uint256 nativeAmount;
+        TokenAmount[] tokens;
+        Call[] calls;
+    }
+
+    struct TokenAmount {
+        address token;
+        uint256 amount;
+    }
+
+    struct Call {
+        address target;
+        bytes data;
+        uint256 value;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### encodeReward
+
+Encodes a reward object into ABI-encoded bytes.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    function encodeReward(reward: Reward): string
+    ```
+
+    **Parameters:**
+    - `reward`: Reward object containing payment details for intent fulfillment
+
+    **Returns:** ABI-encoded reward data as hex string
+
+    **Example:**
+    ```typescript
+    import { encodeReward } from './utils/intent'
+
+    const reward = {
+      deadline: 1700000000,
+      creator: '0xCreator123...',
+      prover: '0xProver456...',
+      nativeAmount: 100000000000000000n, // 0.1 ETH reward
+      tokens: [
+        { 
+          token: '0xRewardToken...', 
+          amount: 50000n 
+        }
+      ]
+    }
+
+    const encodedReward = encodeReward(reward)
+    ```
+  </Tab>
+  <Tab title="Structure">
+    ```solidity
+    struct Reward {
+        uint64 deadline;
+        address creator;
+        address prover;
+        uint256 nativeAmount;
+        TokenAmount[] tokens;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### encodeIntent
+
+Encodes a complete intent object combining destination, route, and reward.
+
+```typescript
+function encodeIntent(intent: Intent): string
+```
+
+**Parameters:**
+- `intent`: Complete intent object
+
+**Returns:** ABI-encoded intent data as hex string
+
+**Example:**
+```typescript
+import { encodeIntent } from './utils/intent'
+
+const intent = {
+  destination: 137, // Polygon
+  route: {
+    salt: '0x' + '0'.repeat(64),
+    deadline: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+    portal: '0xPortalAddress...',
+    nativeAmount: 0n,
+    tokens: [],
+    calls: []
+  },
+  reward: {
+    deadline: Math.floor(Date.now() / 1000) + 7200, // 2 hours from now
+    creator: '0xYourAddress...',
+    prover: '0xProverAddress...',
+    nativeAmount: 100000000000000000n,
+    tokens: []
+  }
+}
+
+const encodedIntent = encodeIntent(intent)
+```
+
+## Intent Hashing
+
+### hashIntent
+
+Generates cryptographic hashes for an intent and its components. These hashes are used for CREATE2 address prediction and intent identification.
+
+```typescript
+function hashIntent(intent: Intent): {
+  routeHash: string
+  rewardHash: string
+  intentHash: string
+}
+```
+
+**Parameters:**
+- `intent`: Intent to hash
+
+**Returns:** Object containing:
+- `routeHash`: keccak256 hash of the encoded route
+- `rewardHash`: keccak256 hash of the encoded reward  
+- `intentHash`: keccak256 hash of solidityPacked(destination, routeHash, rewardHash)
+
+**Example:**
+```typescript
+import { hashIntent } from './utils/intent'
+
+const hashes = hashIntent(intent)
+
+console.log('Route Hash:', hashes.routeHash)
+console.log('Reward Hash:', hashes.rewardHash)
+console.log('Intent Hash:', hashes.intentHash)
+
+// The intentHash uniquely identifies this intent
+// The routeHash is used as the CREATE2 salt for vault deployment
+```
+
+**Hash Computation:**
+```typescript
+// Internally computed as:
+const routeHash = keccak256(encodeRoute(intent.route))
+const rewardHash = keccak256(encodeReward(intent.reward))
+const intentHash = keccak256(
+  solidityPacked(
+    ['uint64', 'bytes32', 'bytes32'],
+    [intent.destination, routeHash, rewardHash]
+  )
+)
+```
+
+### intentVaultAddress
+
+Predicts the deterministic CREATE2 vault address for an intent before it's deployed.
+
+```typescript
+async function intentVaultAddress(
+  intentSourceAddress: string,
+  intent: Intent
+): Promise<string>
+```
+
+**Parameters:**
+- `intentSourceAddress`: Address of the IntentSource contract that will deploy the vault
+- `intent`: Intent object to calculate vault address for
+
+**Returns:** Predicted CREATE2 vault contract address
+
+**Example:**
+```typescript
+import { intentVaultAddress } from './utils/intent'
+
+const intentSource = '0xIntentSourceAddress...'
+const vaultAddr = await intentVaultAddress(intentSource, intent)
+
+console.log('Vault will be deployed at:', vaultAddr)
+
+// Use this address to:
+// 1. Fund the vault before intent execution
+// 2. Monitor vault deployment
+// 3. Verify vault address on-chain
+```
+
+**CREATE2 Computation:**
+The vault address is computed using:
+- **Deployer**: `intentSourceAddress` (IntentSource contract)
+- **Salt**: `routeHash` from the intent
+- **Init code**: Vault bytecode + ABI-encoded constructor args (intentHash, reward)
+
+## Function Call Encoding
+
+Utilities for encoding common contract function calls.
+
+### encodeTransfer
+
+Encodes an ERC20 `transfer` function call.
+
+```typescript
+async function encodeTransfer(
+  to: string,
+  value: number
+): Promise<string>
+```
+
+**Parameters:**
+- `to`: Recipient address
+- `value`: Amount to transfer (in token's smallest unit)
+
+**Returns:** Encoded calldata for `transfer(address,uint256)`
+
+**Example:**
+```typescript
+import { encodeTransfer } from './utils/encode'
+
+// Encode USDC transfer (6 decimals)
+const transferCalldata = await encodeTransfer(
+  '0xRecipient...',
+  1000000 // 1 USDC
+)
+
+// Use in a Call object
+const call = {
+  target: '0xUSDCAddress...', // USDC contract
+  data: transferCalldata,
+  value: 0 // No native token value
+}
+```
+
+### encodeTransferNative
+
+Encodes a native token transfer function call.
+
+```typescript
+async function encodeTransferNative(
+  to: string,
+  value: number
+): Promise<string>
+```
+
+**Parameters:**
+- `to`: Recipient address
+- `value`: Amount of native tokens to transfer (in wei)
+
+**Returns:** Encoded calldata for `transferNative(address,uint256)`
+
+**Example:**
+```typescript
+import { encodeTransferNative } from './utils/encode'
+
+const calldata = await encodeTransferNative(
+  '0xRecipient...',
+  1000000000000000000 // 1 ETH in wei
+)
+```
+
+### encodeTransferPayable
+
+Encodes a payable transfer function call.
+
+```typescript
+async function encodeTransferPayable(
+  to: string,
+  value: number
+): Promise<string>
+```
+
+**Parameters:**
+- `to`: Recipient address
+- `value`: Amount to transfer
+
+**Returns:** Encoded calldata for `transferPayable(address,uint256)`
+
+### encodeIdentifier
+
+Generates a unique identifier hash from counter and chain ID.
+
+```typescript
+async function encodeIdentifier(
+  counter: number,
+  chainid: NumberLike
+): Promise<string>
+```
+
+**Parameters:**
+- `counter`: Counter value (e.g., nonce, sequence number)
+- `chainid`: Chain ID
+
+**Returns:** keccak256 hash of ABI-encoded counter and chainid
+
+**Example:**
+```typescript
+import { encodeIdentifier } from './utils/encode'
+
+// Generate unique identifier for Ethereum mainnet
+const identifier = await encodeIdentifier(
+  1, // Counter/nonce
+  1  // Ethereum mainnet chain ID
+)
+
+console.log('Unique identifier:', identifier)
+
+// Different counter or chainid produces different identifier
+const identifier2 = await encodeIdentifier(2, 1) // Different
+const identifier3 = await encodeIdentifier(1, 137) // Different (Polygon)
+```
+
+## ERC-7683 Encoding
+
+Utilities for encoding cross-chain orders according to the ERC-7683 standard.
+
+### encodeOnchainCrosschainOrderData
+
+Encodes on-chain cross-chain order data compatible with ERC-7683.
+
+```typescript
+async function encodeOnchainCrosschainOrderData(
+  onchainCrosschainOrderData: OnchainCrosschainOrderData
+): Promise<string>
+```
+
+**Example:**
+```typescript
+import { 
+  encodeOnchainCrosschainOrderData,
+  OnchainCrosschainOrderData 
+} from './utils/EcoERC7683'
+import { TypeCasts } from './utils/typeCasts'
+
+const orderData: OnchainCrosschainOrderData = {
+  destination: 137, // Polygon
+  route: {
+    salt: '0x' + '0'.repeat(64),
+    portal: TypeCasts.addressToBytes32('0xPortal...'),
+    tokens: [],
+    calls: []
+  },
+  creator: '0xCreator...',
+  prover: '0xProver...',
+  nativeAmount: 1000000000000000000n,
+  rewardTokens: [],
+  routePortal: TypeCasts.addressToBytes32('0xDestPortal...'),
+  routeDeadline: 1700000000,
+  maxSpent: [
+    {
+      token: TypeCasts.addressToBytes32('0xUSDC...'),
+      amount: 1000000n,
+      recipient: TypeCasts.addressToBytes32('0xRecipient...'),
+      chainId: 137
+    }
+  ]
+}
+
+const encoded = await encodeOnchainCrosschainOrderData(orderData)
+```
+
+### encodeGaslessCrosschainOrderData
+
+Encodes gasless cross-chain order data for permit-based intents.
+
+```typescript
+async function encodeGaslessCrosschainOrderData(
+  gaslessCrosschainOrderData: GaslessCrosschainOrderData
+): Promise<string>
+```
+
+**Example:**
+```typescript
+import { 
+  encodeGaslessCrosschainOrderData,
+  GaslessCrosschainOrderData 
+} from './utils/EcoERC7683'
+
+const gaslessOrderData: GaslessCrosschainOrderData = {
+  destination: 137,
+  portal: TypeCasts.addressToBytes32('0xPortal...'),
+  routeTokens: [],
+  calls: [],
+  prover: '0xProver...',
+  nativeAmount: 0n,
+  rewardTokens: [],
+  routePortal: TypeCasts.addressToBytes32('0xDestPortal...'),
+  routeDeadline: 1700000000,
+  maxSpent: []
+}
+
+const encoded = await encodeGaslessCrosschainOrderData(gaslessOrderData)
+```
+
+### encodeOnchainCrosschainOrder
+
+Encodes a complete on-chain cross-chain order including fill deadline and order type.
+
+```typescript
+async function encodeOnchainCrosschainOrder(
+  onchainCrosschainOrder: OnchainCrosschainOrder
+): Promise<string>
+```
+
+**Example:**
+```typescript
+import { 
+  encodeOnchainCrosschainOrder,
+  encodeOnchainCrosschainOrderData,
+  OnchainCrosschainOrder 
+} from './utils/EcoERC7683'
+import { keccak256, toUtf8Bytes } from 'ethers'
+
+// Define order data type identifier
+const orderDataType = keccak256(toUtf8Bytes('EcoRoutesOrderData'))
+
+const order: OnchainCrosschainOrder = {
+  fillDeadline: Math.floor(Date.now() / 1000) + 3600, // 1 hour
+  orderDataType: orderDataType,
+  orderData: await encodeOnchainCrosschainOrderData(orderData)
+}
+
+const encodedOrder = await encodeOnchainCrosschainOrder(order)
+```
+
+## Complete Example
+
+Here's a complete example creating and encoding an intent:
+
+```typescript
+import { 
+  encodeIntent, 
+  hashIntent, 
+  intentVaultAddress,
+  Intent 
+} from './utils/intent'
+import { encodeTransfer } from './utils/encode'
+
+// 1. Create the intent
+const intent: Intent = {
+  destination: 137, // Polygon
+  route: {
+    salt: '0x' + '1'.repeat(64),
+    deadline: Math.floor(Date.now() / 1000) + 3600,
+    portal: '0xPolygonPortal...',
+    nativeAmount: 0n,
+    tokens: [
+      {
+        token: '0xUSDC...',
+        amount: 1000000n // 1 USDC
+      }
+    ],
+    calls: [
+      {
+        target: '0xUSDC...',
+        data: await encodeTransfer('0xRecipient...', 1000000),
+        value: 0
+      }
+    ]
+  },
+  reward: {
+    deadline: Math.floor(Date.now() / 1000) + 7200,
+    creator: '0xYourAddress...',
+    prover: '0xProverAddress...',
+    nativeAmount: 100000000000000000n, // 0.1 ETH
+    tokens: []
+  }
+}
+
+// 2. Hash the intent
+const { routeHash, rewardHash, intentHash } = hashIntent(intent)
+console.log('Intent hash:', intentHash)
+
+// 3. Predict vault address
+const vaultAddr = await intentVaultAddress(
+  '0xIntentSource...',
+  intent
+)
+console.log('Vault address:', vaultAddr)
+
+// 4. Encode for on-chain submission
+const encodedIntent = encodeIntent(intent)
+console.log('Encoded intent:', encodedIntent)
+```

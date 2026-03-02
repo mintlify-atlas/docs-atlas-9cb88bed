@@ -1,0 +1,201 @@
+---
+title: "Vault"
+description: "Escrow contract for managing cross-chain reward payments"
+---
+
+## Overview
+
+The Vault contract is an escrow contract for managing cross-chain reward payments. It implements a lifecycle-based vault that can be funded, withdrawn from, or refunded.
+
+**Contract Location:** `contracts/vault/Vault.sol`
+
+**Implements:** IVault
+
+<Note>
+Vault contracts are created deterministically using CREATE2 by the IntentSource contract. Each intent gets its own dedicated vault for holding rewards.
+</Note>
+
+## State Variables
+
+### portal
+
+```solidity
+address private immutable portal
+```
+
+Address of the portal contract that can call this vault. Only the portal can call fund, withdraw, refund, and recover functions.
+
+## Constructor
+
+### Vault()
+
+```solidity
+constructor()
+```
+
+Creates a new vault instance. Sets the deployer (IntentSource) as the authorized portal contract.
+
+<Note>
+The constructor automatically sets msg.sender as the portal, ensuring only the deploying contract can manage vault operations.
+</Note>
+
+## State-Changing Functions
+
+### fundFor
+
+```solidity
+function fundFor(
+    Reward calldata reward,
+    address funder,
+    IPermit permit
+) external payable onlyPortal returns (bool fullyFunded)
+```
+
+Funds the vault with tokens and native currency from the reward.
+
+<ParamField path="reward" type="Reward">
+  The reward structure containing token addresses, amounts, and native value
+</ParamField>
+
+<ParamField path="funder" type="address">
+  Address that will provide the funding
+</ParamField>
+
+<ParamField path="permit" type="IPermit">
+  Optional permit contract for gasless token approvals
+</ParamField>
+
+<ResponseField name="fullyFunded" type="bool">
+  True if the vault was fully funded, false otherwise
+</ResponseField>
+
+<Note>
+This function is payable to accept native tokens (ETH). It first attempts to use the permit contract for gasless approvals, then falls back to standard ERC20 transfers if needed.
+</Note>
+
+---
+
+### withdraw
+
+```solidity
+function withdraw(
+    Reward calldata reward,
+    address claimant
+) external onlyPortal
+```
+
+Withdraws rewards from the vault to the specified claimant.
+
+<ParamField path="reward" type="Reward">
+  The reward structure defining what to withdraw
+</ParamField>
+
+<ParamField path="claimant" type="address">
+  Address that will receive the withdrawn rewards
+</ParamField>
+
+<Note>
+The function withdraws the minimum of the reward amount and the vault's actual balance for each token. This allows partial withdrawals if the vault is not fully funded.
+</Note>
+
+---
+
+### refund
+
+```solidity
+function refund(
+    Reward calldata reward,
+    address refundee
+) external onlyPortal
+```
+
+Refunds all vault contents to a specified address.
+
+<ParamField path="reward" type="Reward">
+  The reward structure containing token information
+</ParamField>
+
+<ParamField path="refundee" type="address">
+  Address to receive the refunded rewards
+</ParamField>
+
+<Note>
+Unlike withdraw, this function refunds the entire balance of each token and all native currency in the vault, not just the reward amounts.
+</Note>
+
+---
+
+### recover
+
+```solidity
+function recover(
+    address refundee,
+    address token
+) external onlyPortal
+```
+
+Recovers tokens that are not part of the reward to the creator.
+
+<ParamField path="refundee" type="address">
+  Address to receive the recovered tokens
+</ParamField>
+
+<ParamField path="token" type="address">
+  Address of the token to recover (must not be a reward token)
+</ParamField>
+
+<Note>
+This function is used to recover tokens that were sent to the vault by mistake. The token must not be among the reward tokens, and the vault must have a non-zero balance of the token.
+</Note>
+
+## Errors
+
+### NotPortalCaller
+
+```solidity
+error NotPortalCaller(address caller)
+```
+
+Thrown when a non-portal address attempts to call a restricted function.
+
+### NativeTransferFailed
+
+```solidity
+error NativeTransferFailed(address recipient, uint256 amount)
+```
+
+Thrown when a native token transfer fails.
+
+### ZeroRecoverTokenBalance
+
+```solidity
+error ZeroRecoverTokenBalance(address token)
+```
+
+Thrown when attempting to recover a token with zero balance.
+
+## Access Control
+
+All state-changing functions use the `onlyPortal` modifier, which ensures that only the portal contract can:
+- Fund the vault
+- Withdraw rewards to claimants
+- Refund rewards to creators
+- Recover mistakenly sent tokens
+
+This design ensures that vault operations are properly authorized and follow the intent lifecycle managed by the portal.
+
+## Usage Example
+
+```solidity
+// Vault is created deterministically by IntentSource
+address vaultAddress = intentSource.intentVaultAddress(intent);
+
+// Fund vault (called internally by IntentSource)
+vault.fundFor{value: 1 ether}(reward, funder, permitContract);
+
+// Withdraw to claimant (after intent is proven)
+vault.withdraw(reward, claimantAddress);
+
+// Refund if intent expires
+vault.refund(reward, creatorAddress);
+```

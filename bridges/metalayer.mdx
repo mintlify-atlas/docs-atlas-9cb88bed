@@ -1,0 +1,332 @@
+---
+title: Metalayer Integration
+description: MetaProver implementation using Caldera Metalayer router
+---
+
+MetaProver integrates with Caldera Metalayer's cross-chain messaging system to prove intent fulfillment. It implements the `IMetalayerRecipient` interface to receive messages from the Metalayer router.
+
+## Contract Overview
+
+Location: `contracts/prover/MetaProver.sol`
+
+```solidity contracts/prover/MetaProver.sol
+contract MetaProver is IMetalayerRecipient, MessageBridgeProver, Semver {
+    string public constant PROOF_TYPE = "Meta";
+    IMetalayerRouterExt public immutable ROUTER;
+}
+```
+
+## Constructor
+
+From `MetaProver.sol:58-67`:
+
+```solidity contracts/prover/MetaProver.sol
+constructor(
+    address router,
+    address portal,
+    bytes32[] memory provers,
+    uint256 minGasLimit
+) MessageBridgeProver(portal, provers, minGasLimit)
+```
+
+### Parameters
+
+<ParamField path="router" type="address">
+  Address of the local Metalayer router contract
+</ParamField>
+
+<ParamField path="portal" type="address">
+  Address of the Portal contract that manages rewards
+</ParamField>
+
+<ParamField path="provers" type="bytes32[]">
+  Array of trusted prover addresses on other chains (as bytes32 for cross-VM compatibility)
+</ParamField>
+
+<ParamField path="minGasLimit" type="uint256">
+  Minimum gas limit for cross-chain messages. Defaults to 200,000 if zero.
+</ParamField>
+
+## Prove Function
+
+Inherited from `MessageBridgeProver.sol:112-117`:
+
+```solidity contracts/prover/MessageBridgeProver.sol
+function prove(
+    address sender,
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) external payable only(PORTAL);
+```
+
+<Warning>
+  The `domainID` parameter uses **Metalayer domain IDs**, which are specific to their routing system and NOT the same as chain IDs. Consult Metalayer documentation for domain ID mappings.
+</Warning>
+
+### Data Parameter Structure
+
+The `data` parameter must be ABI-encoded as an `UnpackedData` struct (from `MetaProver.sol:29-32`):
+
+```solidity contracts/prover/MetaProver.sol
+struct UnpackedData {
+    bytes32 sourceChainProver; // Address of prover on source chain
+    uint256 gasLimit;          // Gas limit for execution
+}
+```
+
+**Encoding example:**
+
+```solidity
+bytes memory data = abi.encode(
+    UnpackedData({
+        sourceChainProver: bytes32(uint256(uint160(sourceProverAddress))),
+        gasLimit: 250000
+    })
+);
+```
+
+<Note>
+  Gas limits below `MIN_GAS_LIMIT` (200,000) are automatically increased to the minimum (from `MetaProver.sol:105-107`).
+</Note>
+
+## Message Dispatch
+
+Internal dispatch implementation from `MetaProver.sol:118-147`:
+
+```solidity contracts/prover/MetaProver.sol
+function _dispatchMessage(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data,
+    uint256 fee
+) internal override {
+    UnpackedData memory unpacked = _unpackData(data);
+    
+    (
+        uint32 sourceChainDomain,
+        bytes32 recipient,
+        bytes memory message
+    ) = _formatMetalayerMessage(
+        domainID,
+        encodedProofs,
+        unpacked.sourceChainProver
+    );
+    
+    ROUTER.dispatch{value: fee}(
+        sourceChainDomain,
+        recipient,
+        new ReadOperation[](0),  // No read operations
+        message,
+        FinalityState.INSTANT,
+        unpacked.gasLimit
+    );
+}
+```
+
+### Message Formatting
+
+From `MetaProver.sol:224-243`:
+
+```solidity contracts/prover/MetaProver.sol
+function _formatMetalayerMessage(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes32 sourceChainProver
+) internal pure returns (
+    uint32 domain,
+    bytes32 recipient,
+    bytes memory message
+) {
+    // Convert domain ID with overflow check
+    if (domainID > type(uint32).max) {
+        revert DomainIdTooLarge(domainID);
+    }
+    domain = uint32(domainID);
+    
+    // Use source chain prover as recipient
+    recipient = sourceChainProver;
+    message = encodedProofs;
+}
+```
+
+## Message Reception
+
+From `MetaProver.sol:77-91`:
+
+```solidity contracts/prover/MetaProver.sol
+function handle(
+    uint32 origin,
+    bytes32 sender,
+    bytes calldata message,
+    ReadOperation[] calldata /* operations */,
+    bytes[] calldata /* operationsData */
+) external payable only(address(ROUTER)) {
+    if (origin == 0) revert MessageOriginChainDomainIDCannotBeZero();
+    if (sender == bytes32(0)) revert MessageSenderCannotBeZeroAddress();
+    
+    _handleCrossChainMessage(sender, message);
+}
+```
+
+The `handle()` function:
+1. Validates call is from the Metalayer router
+2. Validates origin domain ID is non-zero
+3. Validates sender address is non-zero
+4. Checks sender is whitelisted
+5. Extracts chain ID from message prefix
+6. Processes intent proofs
+
+## Fee Calculation
+
+From `MetaProver.sol:158-165`:
+
+```solidity contracts/prover/MetaProver.sol
+function fetchFee(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) public view override returns (uint256) {
+    return _fetchFee(domainID, encodedProofs, _unpackData(data));
+}
+```
+
+Internal implementation (from `MetaProver.sol:175-205`):
+
+```solidity contracts/prover/MetaProver.sol
+function _fetchFee(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    UnpackedData memory unpacked
+) internal view returns (uint256) {
+    (
+        uint32 sourceChainDomain,
+        bytes32 recipient,
+        bytes memory message
+    ) = _formatMetalayerMessage(
+        domainID,
+        encodedProofs,
+        unpacked.sourceChainProver
+    );
+    
+    // Create custom hook metadata with actual gas limit
+    bytes memory feeHookMetadata = StandardHookMetadata.formatMetadata(
+        ETH_QUOTE_VALUE,      // Very high value (1e36) to avoid failures
+        unpacked.gasLimit,    // Use actual gas limit (min 200k)
+        msg.sender,           // Refund address
+        bytes("")             // Optional custom metadata
+    );
+    
+    return ROUTER.quoteDispatch(
+        sourceChainDomain,
+        recipient,
+        message,
+        feeHookMetadata
+    );
+}
+```
+
+<Note>
+  The contract uses a very high ETH quote value (1e36) in fee calculation metadata to avoid failures in the Metalayer router's quote dispatch function (from `MetaProver.sol:44`).
+</Note>
+
+## Usage Example
+
+```solidity
+// On destination chain (e.g., Optimism)
+address metaProver = 0x...;  // MetaProver on Optimism
+uint64 sourceDomainID = 1;  // Metalayer domain ID for Ethereum
+
+// Prepare proof data
+bytes32[] memory intentHashes = new bytes32[](1);
+intentHashes[0] = intentHash;
+
+// Encode additional data
+bytes memory data = abi.encode(
+    IMetaProver.UnpackedData({
+        sourceChainProver: bytes32(uint256(uint160(ethereumProverAddress))),
+        gasLimit: 250000
+    })
+);
+
+// Calculate fee
+uint256 fee = IProver(metaProver).fetchFee(
+    sourceDomainID,
+    encodedProofs,
+    data
+);
+
+// Send proof (called by Inbox contract)
+IProver(metaProver).prove{value: fee}(
+    msg.sender,
+    sourceDomainID,
+    encodedProofs,
+    data
+);
+```
+
+## Domain ID Reference
+
+<Warning>
+  Always check Metalayer's official documentation for accurate domain IDs. These are specific to their routing system and NOT chain IDs.
+</Warning>
+
+## Finality States
+
+Metalayer supports different finality states (from `MetaProver.sol:144`):
+
+```solidity contracts/prover/MetaProver.sol
+ROUTER.dispatch{value: fee}(
+    sourceChainDomain,
+    recipient,
+    new ReadOperation[](0),
+    message,
+    FinalityState.INSTANT,  // Or SAFE, FINALIZED
+    unpacked.gasLimit
+);
+```
+
+Available states:
+- `INSTANT` - Fastest, lowest security
+- `SAFE` - Balanced security and speed
+- `FINALIZED` - Highest security, slower
+
+## Security Considerations
+
+### Whitelist Validation
+
+Only whitelisted prover addresses can send proof messages. This is validated in `_handleCrossChainMessage()` from `MessageBridgeProver.sol:81-82`:
+
+```solidity contracts/prover/MessageBridgeProver.sol
+if (!isWhitelisted(messageSender)) {
+    revert UnauthorizedIncomingProof(messageSender);
+}
+```
+
+### Gas Limit Enforcement
+
+The contract enforces a minimum gas limit (from `MetaProver.sol:105-107`):
+
+```solidity contracts/prover/MetaProver.sol
+if (unpacked.gasLimit < MIN_GAS_LIMIT) {
+    unpacked.gasLimit = MIN_GAS_LIMIT;
+}
+```
+
+### Fee Quote Metadata
+
+The contract uses accurate gas limits in fee calculation to ensure proper fee estimation (from `MetaProver.sol:151-156` comments):
+
+```solidity contracts/prover/MetaProver.sol
+/**
+ * @notice Fetches fee required for message dispatch
+ * @dev Uses custom hook metadata with actual gas limit to ensure accurate fee estimation.
+ *      Fixes issue where 3-parameter quoteDispatch used hardcoded 100k gas limit.
+ */
+```
+
+## Related Contracts
+
+- [BaseProver](/bridges/overview#common-base-functionality) - Base proving functionality
+- [MessageBridgeProver](/bridges/overview#common-prove-function) - Message bridge base contract
+- [Inbox](/api/inbox) - Intent fulfillment and proving

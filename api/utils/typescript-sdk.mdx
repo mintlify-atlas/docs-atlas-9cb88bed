@@ -1,0 +1,525 @@
+---
+title: TypeScript SDK Utilities
+description: Helper functions for working with Eco Routes Protocol in TypeScript
+---
+
+The TypeScript SDK provides utility functions for encoding intents, managing routes, and type conversions when interacting with the Eco Routes Protocol.
+
+## Intent Utilities
+
+### Types
+
+#### Call
+
+Represents a contract call to be executed.
+
+```typescript
+type Call = {
+  target: string      // Contract address to call
+  data: string        // Encoded calldata
+  value: number | bigint  // Native token value to send
+}
+```
+
+#### TokenAmount
+
+Represents an ERC20 token and amount.
+
+```typescript
+type TokenAmount = {
+  token: string       // Token contract address
+  amount: number | bigint  // Token amount
+}
+```
+
+#### Route
+
+Defines the execution route on the destination chain.
+
+```typescript
+type Route = {
+  salt: string        // Unique salt for CREATE2 deployment
+  deadline: number | bigint  // Execution deadline timestamp
+  portal: string      // Portal contract address
+  nativeAmount: number | bigint  // Native tokens to transfer
+  tokens: TokenAmount[]  // ERC20 tokens to transfer
+  calls: Call[]       // Contract calls to execute
+}
+```
+
+#### Reward
+
+Defines the reward for intent fulfillment.
+
+```typescript
+type Reward = {
+  creator: string     // Intent creator address
+  prover: string      // Prover/filler address
+  deadline: number | bigint  // Reward claim deadline
+  nativeAmount: bigint  // Native token reward
+  tokens: TokenAmount[]  // ERC20 token rewards
+}
+```
+
+#### Intent
+
+Complete intent structure combining route and reward.
+
+```typescript
+type Intent = {
+  destination: number  // Destination chain ID
+  route: Route        // Execution route
+  reward: Reward      // Fulfillment reward
+}
+```
+
+### Encoding Functions
+
+#### encodeRoute
+
+Encodes a route object into ABI-encoded bytes.
+
+```typescript
+function encodeRoute(route: Route): string
+```
+
+**Parameters:**
+- `route`: Route object to encode
+
+**Returns:** ABI-encoded route data as hex string
+
+**Example:**
+```typescript
+import { encodeRoute } from './utils/intent'
+
+const route = {
+  salt: '0x1234...',
+  deadline: 1700000000,
+  portal: '0xPortalAddress...',
+  nativeAmount: 1000000000000000000n,
+  tokens: [
+    { token: '0xTokenAddress...', amount: 1000000n }
+  ],
+  calls: [
+    { 
+      target: '0xTarget...', 
+      data: '0xCalldata...', 
+      value: 0 
+    }
+  ]
+}
+
+const encoded = encodeRoute(route)
+```
+
+#### encodeReward
+
+Encodes a reward object into ABI-encoded bytes.
+
+```typescript
+function encodeReward(reward: Reward): string
+```
+
+**Parameters:**
+- `reward`: Reward object to encode
+
+**Returns:** ABI-encoded reward data as hex string
+
+**Example:**
+```typescript
+import { encodeReward } from './utils/intent'
+
+const reward = {
+  deadline: 1700000000,
+  creator: '0xCreator...',
+  prover: '0xProver...',
+  nativeAmount: 500000000000000000n,
+  tokens: [
+    { token: '0xRewardToken...', amount: 50000n }
+  ]
+}
+
+const encoded = encodeReward(reward)
+```
+
+#### encodeIntent
+
+Encodes a complete intent into ABI-encoded bytes.
+
+```typescript
+function encodeIntent(intent: Intent): string
+```
+
+**Parameters:**
+- `intent`: Complete intent object to encode
+
+**Returns:** ABI-encoded intent data as hex string
+
+**Example:**
+```typescript
+import { encodeIntent } from './utils/intent'
+
+const intent = {
+  destination: 1,
+  route: { /* route object */ },
+  reward: { /* reward object */ }
+}
+
+const encoded = encodeIntent(intent)
+```
+
+### Hashing Functions
+
+#### hashIntent
+
+Generates cryptographic hashes for an intent and its components.
+
+```typescript
+function hashIntent(intent: Intent): {
+  routeHash: string
+  rewardHash: string
+  intentHash: string
+}
+```
+
+**Parameters:**
+- `intent`: Intent to hash
+
+**Returns:** Object containing three hashes:
+- `routeHash`: Keccak256 hash of encoded route
+- `rewardHash`: Keccak256 hash of encoded reward
+- `intentHash`: Combined hash of destination, routeHash, and rewardHash
+
+**Example:**
+```typescript
+import { hashIntent } from './utils/intent'
+
+const { routeHash, rewardHash, intentHash } = hashIntent(intent)
+console.log('Intent hash:', intentHash)
+```
+
+### Vault Address Prediction
+
+#### intentVaultAddress
+
+Predicts the CREATE2 vault address for an intent.
+
+```typescript
+async function intentVaultAddress(
+  intentSourceAddress: string,
+  intent: Intent
+): Promise<string>
+```
+
+**Parameters:**
+- `intentSourceAddress`: Address of the IntentSource contract
+- `intent`: Intent object to calculate vault address for
+
+**Returns:** Predicted vault contract address
+
+**Example:**
+```typescript
+import { intentVaultAddress } from './utils/intent'
+
+const vaultAddress = await intentVaultAddress(
+  '0xIntentSource...',
+  intent
+)
+console.log('Vault will be deployed at:', vaultAddress)
+```
+
+## Encoding Utilities
+
+Helper functions for encoding common contract function calls.
+
+### encodeTransfer
+
+Encodes an ERC20 transfer function call.
+
+```typescript
+async function encodeTransfer(
+  to: string,
+  value: number
+): Promise<string>
+```
+
+**Parameters:**
+- `to`: Recipient address
+- `value`: Amount to transfer
+
+**Returns:** Encoded calldata for `transfer(address,uint256)`
+
+**Example:**
+```typescript
+import { encodeTransfer } from './utils/encode'
+
+const calldata = await encodeTransfer(
+  '0xRecipient...',
+  1000000
+)
+```
+
+### encodeTransferNative
+
+Encodes a native token transfer function call.
+
+```typescript
+async function encodeTransferNative(
+  to: string,
+  value: number
+): Promise<string>
+```
+
+**Parameters:**
+- `to`: Recipient address
+- `value`: Amount of native tokens to transfer
+
+**Returns:** Encoded calldata for `transferNative(address,uint256)`
+
+### encodeTransferPayable
+
+Encodes a payable transfer function call.
+
+```typescript
+async function encodeTransferPayable(
+  to: string,
+  value: number
+): Promise<string>
+```
+
+**Parameters:**
+- `to`: Recipient address
+- `value`: Amount to transfer
+
+**Returns:** Encoded calldata for `transferPayable(address,uint256)`
+
+### encodeIdentifier
+
+Generates a unique identifier hash from counter and chain ID.
+
+```typescript
+async function encodeIdentifier(
+  counter: number,
+  chainid: NumberLike
+): Promise<string>
+```
+
+**Parameters:**
+- `counter`: Counter value
+- `chainid`: Chain ID
+
+**Returns:** Keccak256 hash of encoded counter and chainid
+
+**Example:**
+```typescript
+import { encodeIdentifier } from './utils/encode'
+
+const identifier = await encodeIdentifier(1, 1) // Ethereum mainnet
+```
+
+## Type Conversion Utilities
+
+The `TypeCasts` utility class provides functions for converting between Ethereum addresses and bytes32 values.
+
+### TypeCasts Class
+
+#### addressToBytes32
+
+Converts an Ethereum address to bytes32 format.
+
+```typescript
+static addressToBytes32(address: string): string
+```
+
+**Parameters:**
+- `address`: Ethereum address (20 bytes)
+
+**Returns:** bytes32 representation (32 bytes, zero-padded)
+
+**Example:**
+```typescript
+import { TypeCasts } from './utils/typeCasts'
+
+const bytes32 = TypeCasts.addressToBytes32('0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb')
+// Returns: '0x000000000000000000000000742d35cc6634c0532925a3b844bc9e7595f0beb'
+```
+
+#### bytes32ToAddress
+
+Converts bytes32 back to an Ethereum address.
+
+```typescript
+static bytes32ToAddress(bytes32: string): string
+```
+
+**Parameters:**
+- `bytes32`: bytes32 value (32 bytes)
+
+**Returns:** Ethereum address (20 bytes, checksummed)
+
+**Example:**
+```typescript
+import { TypeCasts } from './utils/typeCasts'
+
+const address = TypeCasts.bytes32ToAddress(
+  '0x000000000000000000000000742d35cc6634c0532925a3b844bc9e7595f0beb'
+)
+// Returns: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb'
+```
+
+#### addressesToBytes32Array
+
+Converts multiple addresses to bytes32 array.
+
+```typescript
+static addressesToBytes32Array(addresses: string[]): string[]
+```
+
+**Parameters:**
+- `addresses`: Array of Ethereum addresses
+
+**Returns:** Array of bytes32 values
+
+#### bytes32ArrayToAddresses
+
+Converts bytes32 array back to addresses.
+
+```typescript
+static bytes32ArrayToAddresses(bytes32Array: string[]): string[]
+```
+
+**Parameters:**
+- `bytes32Array`: Array of bytes32 values
+
+**Returns:** Array of Ethereum addresses
+
+### Convenience Functions
+
+All TypeCasts methods are also exported as standalone functions:
+
+```typescript
+import {
+  addressToBytes32,
+  bytes32ToAddress,
+  addressesToBytes32Array,
+  bytes32ArrayToAddresses
+} from './utils/typeCasts'
+
+// Use directly without class prefix
+const bytes = addressToBytes32('0x...')
+const addr = bytes32ToAddress('0x...')
+```
+
+## ERC-7683 Utilities
+
+Utilities for working with ERC-7683 cross-chain order standard.
+
+### Types
+
+#### Output
+
+Represents a cross-chain output (for maxSpent/minReceived).
+
+```typescript
+type Output = {
+  token: string       // Token address as bytes32
+  amount: bigint      // Token amount
+  recipient: string   // Recipient address as bytes32
+  chainId: number     // Destination chain ID
+}
+```
+
+#### OnchainCrosschainOrderData
+
+Order data for on-chain cross-chain intents.
+
+```typescript
+type OnchainCrosschainOrderData = {
+  destination: number
+  route: Route
+  creator: string
+  prover: string
+  nativeAmount: bigint
+  rewardTokens: TokenAmount[]
+  routePortal: string      // bytes32
+  routeDeadline: number
+  maxSpent: Output[]
+}
+```
+
+#### GaslessCrosschainOrderData
+
+Order data for gasless cross-chain intents.
+
+```typescript
+type GaslessCrosschainOrderData = {
+  destination: number
+  portal: string
+  routeTokens: TokenAmount[]
+  calls: Call[]
+  prover: string
+  nativeAmount: bigint
+  rewardTokens: TokenAmount[]
+  routePortal: string      // bytes32
+  routeDeadline: number
+  maxSpent: Output[]
+}
+```
+
+### Encoding Functions
+
+#### encodeOnchainCrosschainOrderData
+
+Encodes on-chain cross-chain order data.
+
+```typescript
+async function encodeOnchainCrosschainOrderData(
+  onchainCrosschainOrderData: OnchainCrosschainOrderData
+): Promise<string>
+```
+
+#### encodeGaslessCrosschainOrderData
+
+Encodes gasless cross-chain order data.
+
+```typescript
+async function encodeGaslessCrosschainOrderData(
+  gaslessCrosschainOrderData: GaslessCrosschainOrderData
+): Promise<string>
+```
+
+#### encodeOnchainCrosschainOrder
+
+Encodes a complete on-chain cross-chain order.
+
+```typescript
+async function encodeOnchainCrosschainOrder(
+  onchainCrosschainOrder: OnchainCrosschainOrder
+): Promise<string>
+```
+
+**Example:**
+```typescript
+import { encodeOnchainCrosschainOrderData } from './utils/EcoERC7683'
+
+const orderData = {
+  destination: 1,
+  route: { /* route */ },
+  creator: '0xCreator...',
+  prover: '0xProver...',
+  nativeAmount: 1000000000000000000n,
+  rewardTokens: [],
+  routePortal: '0x...',
+  routeDeadline: 1700000000,
+  maxSpent: [
+    {
+      token: '0x...',
+      amount: 1000000n,
+      recipient: '0x...',
+      chainId: 1
+    }
+  ]
+}
+
+const encoded = await encodeOnchainCrosschainOrderData(orderData)
+```

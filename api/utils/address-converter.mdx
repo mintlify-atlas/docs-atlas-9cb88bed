@@ -1,0 +1,299 @@
+---
+title: AddressConverter Library
+description: Solidity library for converting between address and bytes32 types
+---
+
+The `AddressConverter` library provides utility functions for converting between Ethereum `address` (20 bytes) and `bytes32` (32 bytes) types. This is commonly needed when working with cross-chain messaging protocols that use bytes32 for addresses.
+
+## Overview
+
+Ethereum addresses are 20 bytes, while many cross-chain protocols use bytes32 for standardized addressing across different chains. This library handles the conversion between these formats safely and efficiently.
+
+## Functions
+
+### toBytes32
+
+Converts an Ethereum address to bytes32 format.
+
+```solidity
+function toBytes32(address addr) internal pure returns (bytes32)
+```
+
+**Parameters:**
+- `addr`: The Ethereum address to convert (20 bytes)
+
+**Returns:** The bytes32 representation of the address (32 bytes, zero-padded)
+
+**Implementation:**
+The function converts the address by:
+1. Casting to `uint160` (20 bytes)
+2. Casting to `uint256` (32 bytes, zero-padded on left)
+3. Casting to `bytes32`
+
+**Example:**
+```solidity
+import "./libs/AddressConverter.sol";
+
+contract Example {
+    using AddressConverter for address;
+    
+    function convertAddress(address user) public pure returns (bytes32) {
+        // Convert address to bytes32
+        bytes32 userBytes = AddressConverter.toBytes32(user);
+        return userBytes;
+    }
+    
+    // Or using library syntax
+    function convertAddressAlt(address user) public pure returns (bytes32) {
+        return user.toBytes32();
+    }
+}
+```
+
+### toAddress
+
+Converts bytes32 back to an Ethereum address.
+
+```solidity
+function toAddress(bytes32 b) internal pure returns (address)
+```
+
+**Parameters:**
+- `b`: The bytes32 value to convert (32 bytes)
+
+**Returns:** The Ethereum address extracted from the bytes32 value
+
+**Reverts:**
+- `InvalidAddress(bytes32)`: If the bytes32 value cannot be safely converted to an address (top 12 bytes are not zero)
+
+**Implementation:**
+The function:
+1. Validates that the bytes32 can be safely converted using `isValidAddress()`
+2. Converts by casting to `uint256`, then `uint160`, then `address`
+
+**Example:**
+```solidity
+import "./libs/AddressConverter.sol";
+
+contract Example {
+    using AddressConverter for bytes32;
+    
+    function convertBytes(bytes32 addressBytes) public pure returns (address) {
+        // Convert bytes32 to address (reverts if invalid)
+        address user = AddressConverter.toAddress(addressBytes);
+        return user;
+    }
+    
+    // Or using library syntax
+    function convertBytesAlt(bytes32 addressBytes) public pure returns (address) {
+        return addressBytes.toAddress();
+    }
+}
+```
+
+### isValidAddress
+
+Checks if a bytes32 value can be safely converted to an Ethereum address.
+
+```solidity
+function isValidAddress(bytes32 b) internal pure returns (bool)
+```
+
+**Parameters:**
+- `b`: The bytes32 value to validate
+
+**Returns:** `true` if the bytes32 can be safely converted to an address, `false` otherwise
+
+**Validation:**
+For a bytes32 to represent a valid Ethereum address:
+- The top 12 bytes (96 bits) must be zero
+- Only the bottom 20 bytes (160 bits) should contain data
+
+**Example:**
+```solidity
+import "./libs/AddressConverter.sol";
+
+contract Example {
+    using AddressConverter for bytes32;
+    
+    function validateAndConvert(bytes32 addressBytes) public pure returns (address) {
+        // Check if valid before converting
+        if (AddressConverter.isValidAddress(addressBytes)) {
+            return AddressConverter.toAddress(addressBytes);
+        } else {
+            revert("Invalid address bytes");
+        }
+    }
+    
+    function checkValidity(bytes32 value) public pure returns (bool) {
+        return value.isValidAddress();
+    }
+}
+```
+
+## Errors
+
+### InvalidAddress
+
+Thrown when attempting to convert an invalid bytes32 value to an address.
+
+```solidity
+error InvalidAddress(bytes32 value);
+```
+
+**Parameters:**
+- `value`: The invalid bytes32 value that was attempted to be converted
+
+**When it occurs:**
+- When calling `toAddress()` with a bytes32 value where the top 12 bytes are not zero
+
+## Usage Patterns
+
+### Basic Conversion
+
+```solidity
+import "./libs/AddressConverter.sol";
+
+contract CrossChainMessenger {
+    using AddressConverter for address;
+    using AddressConverter for bytes32;
+    
+    function sendMessage(address recipient, bytes memory data) external {
+        // Convert address to bytes32 for cross-chain message
+        bytes32 recipientBytes = recipient.toBytes32();
+        
+        // Send message with bytes32 recipient
+        _sendCrossChainMessage(recipientBytes, data);
+    }
+    
+    function receiveMessage(bytes32 senderBytes, bytes memory data) external {
+        // Convert bytes32 back to address
+        address sender = senderBytes.toAddress();
+        
+        // Process message from sender
+        _processMessage(sender, data);
+    }
+    
+    function _sendCrossChainMessage(bytes32 recipient, bytes memory data) internal {
+        // Implementation
+    }
+    
+    function _processMessage(address sender, bytes memory data) internal {
+        // Implementation
+    }
+}
+```
+
+### Safe Conversion with Validation
+
+```solidity
+import "./libs/AddressConverter.sol";
+
+contract SafeConverter {
+    using AddressConverter for bytes32;
+    
+    event AddressConverted(bytes32 indexed input, address indexed output);
+    
+    function safeConvert(bytes32 addressBytes) external returns (address) {
+        // Validate before converting
+        require(
+            addressBytes.isValidAddress(),
+            "Invalid address format"
+        );
+        
+        address converted = addressBytes.toAddress();
+        emit AddressConverted(addressBytes, converted);
+        
+        return converted;
+    }
+    
+    function batchConvert(bytes32[] calldata addressesBytes) 
+        external 
+        pure 
+        returns (address[] memory) 
+    {
+        address[] memory addresses = new address[](addressesBytes.length);
+        
+        for (uint256 i = 0; i < addressesBytes.length; i++) {
+            // Will revert on invalid address
+            addresses[i] = addressesBytes[i].toAddress();
+        }
+        
+        return addresses;
+    }
+}
+```
+
+### Integration with Cross-Chain Protocols
+
+```solidity
+import "./libs/AddressConverter.sol";
+
+contract CrossChainBridge {
+    using AddressConverter for address;
+    using AddressConverter for bytes32;
+    
+    struct CrossChainTransfer {
+        bytes32 recipient;  // bytes32 for cross-chain compatibility
+        uint256 amount;
+        uint256 destinationChainId;
+    }
+    
+    function initiateTransfer(
+        address recipient,
+        uint256 amount,
+        uint256 destinationChainId
+    ) external {
+        // Convert local address to bytes32 for cross-chain transfer
+        CrossChainTransfer memory transfer = CrossChainTransfer({
+            recipient: recipient.toBytes32(),
+            amount: amount,
+            destinationChainId: destinationChainId
+        });
+        
+        _processTransfer(transfer);
+    }
+    
+    function completeTransfer(CrossChainTransfer calldata transfer) external {
+        // Convert bytes32 back to local address
+        address localRecipient = transfer.recipient.toAddress();
+        
+        // Transfer tokens to local recipient
+        _transferTokens(localRecipient, transfer.amount);
+    }
+    
+    function _processTransfer(CrossChainTransfer memory transfer) internal {
+        // Implementation
+    }
+    
+    function _transferTokens(address to, uint256 amount) internal {
+        // Implementation
+    }
+}
+```
+
+## TypeScript Equivalent
+
+The TypeScript SDK provides equivalent functionality. See [TypeScript SDK Utilities](/api/utils/typescript-sdk#type-conversion-utilities) for the TypeScript implementation.
+
+```typescript
+import { TypeCasts } from './utils/typeCasts'
+
+// Same functionality in TypeScript
+const bytes32 = TypeCasts.addressToBytes32('0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb')
+const address = TypeCasts.bytes32ToAddress(bytes32)
+```
+
+## Gas Optimization
+
+All functions in this library are marked as `internal pure`, meaning:
+- No state is read or modified
+- Functions are inlined during compilation (no JUMP operations)
+- Minimal gas cost (just the type conversions)
+
+## Best Practices
+
+1. **Always validate** when converting from bytes32 to address using external input
+2. **Use library syntax** for cleaner code: `address.toBytes32()` instead of `AddressConverter.toBytes32(address)`
+3. **Handle errors** appropriately when `toAddress()` might revert
+4. **Batch conversions** when possible to optimize gas in loops

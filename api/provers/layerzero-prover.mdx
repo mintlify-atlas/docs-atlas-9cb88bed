@@ -1,0 +1,371 @@
+---
+title: "LayerZeroProver"
+description: "Prover implementation using LayerZero V2's cross-chain messaging system"
+---
+
+## Overview
+
+`LayerZeroProver` processes proof messages from LayerZero's endpoint and records proven intents. It extends `MessageBridgeProver` to provide LayerZero V2-specific messaging functionality.
+
+**Contract:** `contracts/prover/LayerZeroProver.sol`
+
+**Inheritance:** `ILayerZeroReceiver`, `MessageBridgeProver`, `Semver`
+
+**Proof Type:** `"LayerZero"`
+
+<Warning>
+  **Domain ID vs Chain ID:** LayerZero uses endpoint IDs (eids) that differ from chain IDs. Always consult [LayerZero's documentation](https://docs.layerzero.network/) to determine the correct endpoint ID for your target chain.
+</Warning>
+
+## Constructor
+
+```solidity
+constructor(
+    address endpoint,
+    address delegate,
+    address portal,
+    bytes32[] memory provers,
+    uint256 minGasLimit
+)
+```
+
+Initializes the LayerZeroProver contract.
+
+<ParamField path="endpoint" type="address" required>
+  Address of the local LayerZero V2 endpoint contract
+</ParamField>
+
+<ParamField path="delegate" type="address" required>
+  Address authorized to configure LayerZero settings (configs, paths, etc.)
+</ParamField>
+
+<ParamField path="portal" type="address" required>
+  Address of the Portal contract
+</ParamField>
+
+<ParamField path="provers" type="bytes32[]" required>
+  Array of trusted prover addresses (as bytes32 for cross-VM compatibility)
+</ParamField>
+
+<ParamField path="minGasLimit" type="uint256" required>
+  Minimum gas limit for cross-chain messages. Defaults to 200,000 if zero.
+</ParamField>
+
+**Behavior:**
+- Sets delegate on the LayerZero endpoint for administrative functions
+- Delegate can configure settings on behalf of this contract
+
+**Errors:**
+- `EndpointCannotBeZeroAddress()`: Endpoint address is zero
+- `DelegateCannotBeZeroAddress()`: Delegate address is zero
+- `ZeroPortal()`: Portal address is zero
+
+**Location:** `contracts/prover/LayerZeroProver.sol:57`
+
+## State Variables
+
+### ENDPOINT
+
+```solidity
+address public immutable ENDPOINT
+```
+
+Address of the local LayerZero V2 endpoint contract.
+
+### PROOF_TYPE
+
+```solidity
+string public constant PROOF_TYPE = "LayerZero"
+```
+
+Constant indicating this contract uses LayerZero for proving.
+
+### MIN_GAS_LIMIT
+
+```solidity
+uint256 public immutable MIN_GAS_LIMIT
+```
+
+Minimum gas limit for cross-chain message dispatch. Inherited from `MessageBridgeProver`. Defaults to 200,000.
+
+## Core Functions
+
+### prove
+
+```solidity
+function prove(
+    address sender,
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) external payable
+```
+
+Inherited from `MessageBridgeProver`. Initiates proving process by dispatching a message via LayerZero.
+
+<ParamField path="sender" type="address" required>
+  Address that initiated the proving request (receives refund if overpaid)
+</ParamField>
+
+<ParamField path="domainID" type="uint64" required>
+  LayerZero endpoint ID (eid) of the source chain. **NOT the chain ID.**
+</ParamField>
+
+<ParamField path="encodedProofs" type="bytes" required>
+  Encoded (intentHash, claimant) pairs. Format: `[intentHash1][claimant1][intentHash2][claimant2]...`
+</ParamField>
+
+<ParamField path="data" type="bytes" required>
+  ABI-encoded `UnpackedData` struct containing:
+  - `sourceChainProver` (bytes32): Address of prover on source chain
+  - `options` (bytes): LayerZero message options (empty for default)
+  - `gasLimit` (uint256): Gas limit for execution (min 200k)
+</ParamField>
+
+**Behavior:**
+1. Calculates required fee via `fetchFee`
+2. Validates msg.value covers fee
+3. Dispatches message via LayerZero endpoint
+4. Refunds excess payment to sender
+
+**Errors:**
+- `InsufficientFee(uint256 required)`: msg.value is less than required fee
+- `DomainIdTooLarge(uint64 domainID)`: Domain ID exceeds uint32.max
+
+**Access Control:** Only callable by PORTAL
+
+**Location:** Inherited from `MessageBridgeProver.sol:112`
+
+### lzReceive
+
+```solidity
+function lzReceive(
+    Origin calldata origin,
+    bytes32 /* guid */,
+    bytes calldata message,
+    address /* executor */,
+    bytes calldata /* extraData */
+) external payable override
+```
+
+Handles incoming LayerZero messages containing proof data. Called by the LayerZero endpoint.
+
+<ParamField path="origin" type="Origin" required>
+  Origin information containing:
+  - `srcEid` (uint32): Source endpoint ID
+  - `sender` (bytes32): Address that dispatched the message
+  - `nonce` (uint64): Message nonce
+</ParamField>
+
+<ParamField path="message" type="bytes" required>
+  Encoded message with format: `[chainId (8 bytes)][intentHash1][claimant1][intentHash2][claimant2]...`
+</ParamField>
+
+**Behavior:**
+1. Validates sender is not zero
+2. Validates sender is whitelisted
+3. Extracts chain ID from first 8 bytes of message
+4. Processes intent proofs using `_processIntentProofs`
+
+**Errors:**
+- `MessageSenderCannotBeZeroAddress()`: Sender is zero
+- `UnauthorizedIncomingProof(bytes32 sender)`: Sender not whitelisted
+
+**Access Control:** Only callable by ENDPOINT
+
+**Location:** `contracts/prover/LayerZeroProver.sol:85`
+
+### allowInitializePath
+
+```solidity
+function allowInitializePath(
+    Origin calldata origin
+) external view override returns (bool)
+```
+
+Checks if a path is allowed for receiving messages.
+
+<ParamField path="origin" type="Origin" required>
+  Origin information to check
+</ParamField>
+
+**Returns:** `true` if sender is whitelisted, `false` otherwise
+
+**Location:** `contracts/prover/LayerZeroProver.sol:105`
+
+### nextNonce
+
+```solidity
+function nextNonce(
+    uint32 /* srcEid */,
+    bytes32 /* sender */
+) external pure override returns (uint64)
+```
+
+Returns the next expected nonce from a source.
+
+**Returns:** Always returns `0` as this contract doesn't track nonces
+
+**Location:** `contracts/prover/LayerZeroProver.sol:117`
+
+### fetchFee
+
+```solidity
+function fetchFee(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) public view override returns (uint256)
+```
+
+Calculates the fee required for LayerZero message dispatch.
+
+<ParamField path="domainID" type="uint64" required>
+  LayerZero endpoint ID of the source chain
+</ParamField>
+
+<ParamField path="encodedProofs" type="bytes" required>
+  Encoded (intentHash, claimant) pairs
+</ParamField>
+
+<ParamField path="data" type="bytes" required>
+  ABI-encoded UnpackedData struct
+</ParamField>
+
+**Returns:** Native fee amount required for message dispatch
+
+**Note:** Enforces minimum gas limit during unpacking.
+
+**Location:** `contracts/prover/LayerZeroProver.sol:166`
+
+### getProofType
+
+```solidity
+function getProofType() external pure override returns (string memory)
+```
+
+**Returns:** `"LayerZero"`
+
+## Internal Functions
+
+### _dispatchMessage
+
+```solidity
+function _dispatchMessage(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data,
+    uint256 fee
+) internal override
+```
+
+Implementation of message dispatch for LayerZero. Called by base `prove()` function.
+
+**Behavior:**
+1. Unpacks data into structured format (enforces min gas limit)
+2. Formats LayerZero message parameters
+3. Calls `ILayerZeroEndpointV2(ENDPOINT).send` with fee
+4. Refund address is msg.sender
+
+**Location:** `contracts/prover/LayerZeroProver.sol:133`
+
+### _formatLayerZeroMessage
+
+```solidity
+function _formatLayerZeroMessage(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    UnpackedData memory unpacked
+) internal pure returns (ILayerZeroEndpointV2.MessagingParams memory params)
+```
+
+Formats data for LayerZero message dispatch.
+
+**Returns:** `MessagingParams` struct with:
+- `dstEid` (uint32): Destination endpoint ID
+- `receiver` (bytes32): Source chain prover address
+- `message` (bytes): Encoded proofs
+- `options` (bytes): Gas options (uses provided or creates default with gas limit)
+- `payInLzToken` (bool): Always false (pay in native)
+
+**Default Options Format:**
+```solidity
+abi.encodePacked(
+    uint16(3),        // option type for gas limit
+    unpacked.gasLimit // gas amount (min 200k)
+)
+```
+
+**Location:** `contracts/prover/LayerZeroProver.sol:239`
+
+### _unpackData
+
+```solidity
+function _unpackData(
+    bytes calldata data
+) internal view returns (UnpackedData memory unpacked)
+```
+
+Decodes raw message data and enforces minimum gas limit.
+
+**Behavior:**
+- Decodes ABI-encoded UnpackedData
+- If gasLimit < MIN_GAS_LIMIT, sets to MIN_GAS_LIMIT
+
+**Location:** `contracts/prover/LayerZeroProver.sol:184`
+
+## Data Structures
+
+### UnpackedData
+
+```solidity
+struct UnpackedData {
+    bytes32 sourceChainProver; // Address of prover on source chain
+    bytes options;             // LayerZero message options
+    uint256 gasLimit;          // Gas limit for execution
+}
+```
+
+Contains fields decoded from the `data` parameter. Gas limit is enforced to be at least MIN_GAS_LIMIT (200k).
+
+## Domain ID Mapping
+
+<Warning>
+  LayerZero endpoint IDs (eids) are **NOT** chain IDs. You must use LayerZero-specific endpoint IDs.
+
+  **Examples:**
+  - Ethereum Mainnet: Endpoint 30101 (Chain ID 1)
+  - Optimism: Endpoint 30111 (Chain ID 10)
+  - Arbitrum: Endpoint 30110 (Chain ID 42161)
+  - Base: Endpoint 30184 (Chain ID 8453)
+  
+  Check [LayerZero's endpoint registry](https://docs.layerzero.network/v2/developers/evm/technical-reference/deployed-contracts) for the complete mapping.
+</Warning>
+
+## Usage Example
+
+```solidity
+// On destination chain, prepare proof data
+bytes memory data = abi.encode(
+    UnpackedData({
+        sourceChainProver: bytes32(uint256(uint160(sourceProverAddress))),
+        options: "", // Use default options
+        gasLimit: 250000 // Custom gas limit (min 200k)
+    })
+);
+
+// Calculate fee
+uint256 fee = lzProver.fetchFee(
+    lzSourceEndpointId,
+    encodedProofs,
+    data
+);
+
+// Send proof via portal
+portal.prove{value: fee}(
+    address(lzProver),
+    lzSourceEndpointId,
+    encodedProofs,
+    data
+);
+```

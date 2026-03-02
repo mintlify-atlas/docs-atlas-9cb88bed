@@ -1,0 +1,568 @@
+---
+title: 'Deterministic Addresses'
+description: 'CREATE2 deployment and deterministic address calculation for vaults and deposit contracts'
+icon: 'fingerprint'
+---
+
+## Overview
+
+Eco Routes Protocol uses CREATE2 for deterministic address generation across two critical components:
+
+1. **Intent Vaults**: Escrow contracts holding rewards
+2. **Deposit Addresses**: User-specific deposit endpoints
+
+Deterministic addresses enable powerful features like sending funds before deployment and predicting contract locations across chains.
+
+## CREATE2 Basics
+
+### Standard EVM Formula
+
+```solidity
+address = keccak256(
+    0xff,
+    deployer_address,
+    salt,
+    keccak256(init_code)
+)[12:]
+```
+
+**Parameters:**
+- `0xff`: CREATE2 prefix (standard for EVM)
+- `deployer_address`: Address of the contract deploying
+- `salt`: Unique 32-byte value
+- `init_code`: Contract creation bytecode
+
+### TRON Exception
+
+<Note>
+**TRON Networks**: Use prefix `0x41` instead of `0xff` for historical reasons.
+</Note>
+
+```solidity
+// From IntentSource.sol:33-58
+/// @dev CREATE2 prefix for deterministic address calculation
+bytes1 private immutable CREATE2_PREFIX;
+
+/// @dev Tron Mainnet chain ID
+uint256 private immutable TRON_MAINNET_CHAIN_ID = 728126428;
+/// @dev Tron Testnet (Shasta) chain ID
+uint256 private immutable TRON_TESTNET_CHAIN_ID = 2494104990;
+
+constructor() {
+    // TRON support
+    CREATE2_PREFIX = block.chainid == TRON_MAINNET_CHAIN_ID ||
+                     block.chainid == TRON_TESTNET_CHAIN_ID
+        ? bytes1(0x41)  // TRON chain custom CREATE2 prefix
+        : bytes1(0xff); // Standard EVM prefix
+    
+    VAULT_IMPLEMENTATION = address(new Vault());
+}
+```
+
+## Clones Library
+
+The protocol uses minimal proxy clones for gas-efficient deployments:
+
+```solidity
+// From Clones.sol:12-69
+library Clones {
+    function clone(
+        address implementation,
+        bytes32 salt
+    ) internal returns (address instance) {
+        instance = address(new Proxy{salt: salt}(implementation));
+    }
+    
+    function predict(
+        address implementation,
+        bytes32 salt,
+        bytes1 prefix
+    ) internal view returns (address predicted) {
+        predicted = address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encodePacked(
+                            prefix,              // 0xff or 0x41
+                            address(this),       // Deployer address
+                            salt,                // Unique salt
+                            keccak256(
+                                abi.encodePacked(
+                                    type(Proxy).creationCode,
+                                    abi.encode(implementation)
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        );
+    }
+}
+```
+
+**Benefits:**
+- **Gas efficient**: Minimal proxy pattern (~200 gas overhead per call)
+- **Deterministic**: Same salt always produces same address
+- **Flexible**: Change implementation without redeploying all proxies
+
+## Intent Vault Addresses
+
+### Deterministic Vault Calculation
+
+Each intent gets a unique vault based on its `intentHash`:
+
+```solidity
+// From IntentSource.sol:164-195
+function intentVaultAddress(
+    Intent calldata intent
+) public view returns (address) {
+    return intentVaultAddress(
+        intent.destination,
+        abi.encode(intent.route),
+        intent.reward
+    );
+}
+
+function intentVaultAddress(
+    uint64 destination,
+    bytes memory route,
+    Reward calldata reward
+) public view returns (address) {
+    (bytes32 intentHash, , ) = getIntentHash(destination, route, reward);
+    
+    return _getVault(intentHash);
+}
+
+function _getVault(bytes32 intentHash) internal view returns (address) {
+    return VAULT_IMPLEMENTATION.predict(intentHash, CREATE2_PREFIX);
+}
+```
+
+### Intent Hash Calculation
+
+```solidity
+// From IntentSource.sol:138-162
+function getIntentHash(
+    uint64 destination,
+    bytes32 _routeHash,
+    Reward memory reward
+)
+    public
+    pure
+    returns (bytes32 intentHash, bytes32 routeHash, bytes32 rewardHash)
+{
+    routeHash = _routeHash;
+    rewardHash = keccak256(abi.encode(reward));
+    intentHash = keccak256(
+        abi.encodePacked(destination, routeHash, rewardHash)
+    );
+}
+```
+
+**Intent hash components:**
+
+```
+intentHash = keccak256(
+    destination (uint64),
+    routeHash (bytes32),
+    rewardHash (bytes32)
+)
+```
+
+### Example Vault Address
+
+```solidity
+// Step 1: Calculate intent hash
+Intent memory intent = Intent({
+    destination: 42161,  // Arbitrum
+    route: Route({
+        salt: 0xabcd...,
+        deadline: 1234567890,
+        // ...
+    }),
+    reward: Reward({
+        creator: 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb,
+        deadline: 1234567890,
+        // ...
+    })
+});
+
+bytes32 routeHash = keccak256(abi.encode(intent.route));
+bytes32 rewardHash = keccak256(abi.encode(intent.reward));
+bytes32 intentHash = keccak256(
+    abi.encodePacked(
+        intent.destination,  // 42161
+        routeHash,
+        rewardHash
+    )
+);
+
+// Step 2: Predict vault address
+address vaultAddr = VAULT_IMPLEMENTATION.predict(
+    intentHash,  // Used as salt
+    bytes1(0xff) // Standard CREATE2 prefix
+);
+
+// Step 3: Send funds before deployment (if needed)
+USDC.transfer(vaultAddr, 100e6);
+
+// Step 4: Deploy vault (lazy deployment)
+address deployed = _getOrDeployVault(intentHash);
+assert(deployed == vaultAddr);  // ✅ Matches predicted address
+```
+
+### Lazy Deployment
+
+```solidity
+// From IntentSource.sol:886-893
+function _getOrDeployVault(bytes32 intentHash) internal returns (address) {
+    address vault = _getVault(intentHash);
+    
+    return vault.code.length > 0
+        ? vault              // Already deployed
+        : VAULT_IMPLEMENTATION.clone(intentHash);  // Deploy now
+}
+```
+
+<Note>
+**Optimization**: Vaults are only deployed when needed (funding, withdrawal, or refund), saving gas for simple view operations.
+</Note>
+
+## Deposit Address Calculation
+
+### Factory-Based Deployment
+
+Deposit addresses are created by factory contracts:
+
+```solidity
+// From BaseDepositFactory.sol:42-72
+function deploy(
+    address destinationAddress,
+    address depositor
+) external returns (address deployed) {
+    // Deploy using CREATE2 with deterministic salt
+    bytes32 salt = _getSalt(destinationAddress, depositor);
+    deployed = DEPOSIT_IMPLEMENTATION.clone(salt);
+    
+    // Initialize the deployed contract
+    _initializeDeployedContract(deployed, destinationAddress, depositor);
+    
+    emit DepositContractDeployed(destinationAddress, deployed);
+}
+
+function getDepositAddress(
+    address destinationAddress,
+    address depositor
+) public view returns (address predicted) {
+    bytes32 salt = _getSalt(destinationAddress, depositor);
+    return DEPOSIT_IMPLEMENTATION.predict(salt, bytes1(0xff));
+}
+
+function _getSalt(
+    address destinationAddress,
+    address depositor
+) internal pure returns (bytes32) {
+    return keccak256(abi.encodePacked(destinationAddress, depositor));
+}
+```
+
+### Salt Composition
+
+```solidity
+salt = keccak256(
+    abi.encodePacked(
+        destinationAddress,  // Where user wants to receive funds
+        depositor            // Who can receive refunds
+    )
+)
+```
+
+**Why include depositor?**
+- Different refund addresses need different deposit contracts
+- Same destination + different depositor = different address
+- Prevents address collisions between users
+
+### Deployment Check
+
+```solidity
+// From BaseDepositFactory.sol:88-100
+function isDeployed(
+    address destinationAddress,
+    address depositor
+) external view returns (bool) {
+    address predicted = getDepositAddress(destinationAddress, depositor);
+    return predicted.code.length > 0;
+}
+```
+
+**Usage pattern:**
+
+```javascript
+const depositAddr = await factory.getDepositAddress(
+    destinationAddress,
+    depositor
+);
+
+if (!(await factory.isDeployed(destinationAddress, depositor))) {
+    // Address exists but contract not deployed yet
+    // User can still send funds!
+    await user.sendTransaction({
+        to: depositAddr,
+        value: ethers.utils.parseEther("1.0")
+    });
+    
+    // Deploy later when needed
+    await factory.deploy(destinationAddress, depositor);
+}
+```
+
+## Practical Examples
+
+### Example 1: Pre-Funding a Vault
+
+```solidity
+// Alice wants to create an intent but fund it externally
+
+// Step 1: Calculate future vault address
+Intent memory intent = /* ... */;
+address vaultAddr = portal.intentVaultAddress(intent);
+
+// Step 2: Send tokens directly to vault (before it exists!)
+USDC.transfer(vaultAddr, 100e6);
+
+// Step 3: Publish intent without funding
+(bytes32 intentHash, address vault) = portal.publish(intent);
+assert(vault == vaultAddr);  // ✅ Matches
+
+// Step 4: Check if funded
+bool isFunded = portal.isIntentFunded(intent);
+assert(isFunded);  // ✅ true - vault has balance even though not deployed
+```
+
+### Example 2: Deposit Address for CEX Withdrawal
+
+```solidity
+// Bob wants to withdraw from Binance to Arbitrum
+
+address bobArbitrum = 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb;
+address bobRefundAddr = msg.sender;
+
+// Step 1: Get deposit address (no transaction needed)
+address depositAddr = factory.getDepositAddress(
+    bobArbitrum,
+    bobRefundAddr
+);
+// Returns: 0xDe7e03F1C98b5c5c2e8F3c2F1b9D8A7E6C5B4A3D (example)
+
+// Step 2: Bob withdraws from Binance to depositAddr
+// (No contract deployed yet, but address is valid!)
+
+// Step 3: Backend detects deposit and deploys contract
+if (!factory.isDeployed(bobArbitrum, bobRefundAddr)) {
+    await factory.deploy(bobArbitrum, bobRefundAddr);
+}
+
+// Step 4: Backend triggers intent creation
+DepositAddress(depositAddr).createIntent();
+```
+
+### Example 3: Cross-Chain Vault Address
+
+```solidity
+// Calculate vault address on multiple chains for the same intent
+
+Intent memory intent = /* ... */;
+
+// On Ethereum (chain 1)
+address ethVault = ethereumPortal.intentVaultAddress(intent);
+
+// On Arbitrum (chain 42161)
+address arbVault = arbitrumPortal.intentVaultAddress(intent);
+
+// Note: Addresses will be DIFFERENT because:
+// 1. Portal addresses differ between chains
+// 2. Vault implementation addresses differ
+// 3. Salt (intentHash) may be the same, but deployer differs
+```
+
+<Warning>
+**Different Chains = Different Addresses**: Even with the same salt, CREATE2 produces different addresses on different chains because the deployer address changes.
+</Warning>
+
+## Security Implications
+
+### Address Squatting Prevention
+
+**Concern**: Can someone deploy to an address before the legitimate user?
+
+**Answer**: No, because:
+
+```solidity
+// Only the factory can deploy to predicted addresses
+address predicted = DEPOSIT_IMPLEMENTATION.predict(salt, bytes1(0xff));
+
+// Attacker cannot deploy because:
+// 1. They don't have access to DEPOSIT_IMPLEMENTATION from factory context
+// 2. Deployer address must be the factory
+// 3. Salt is derived from user parameters
+```
+
+### Salt Collision
+
+**Concern**: Can two intents have the same vault?
+
+**Answer**: Extremely unlikely:
+
+```solidity
+intentHash = keccak256(
+    abi.encodePacked(
+        destination,   // uint64
+        routeHash,     // bytes32 (includes all route params)
+        rewardHash     // bytes32 (includes creator, deadline, tokens)
+    )
+);
+```
+
+For a collision to occur:
+- Same destination chain
+- Same route (recipient, calls, etc.)
+- Same reward (creator, deadline, amounts)
+- Probability: ~2^-256 (astronomically low)
+
+### Pre-Deployment Vulnerabilities
+
+<Warning>
+**Be Careful**: Sending funds to predicted addresses before deployment requires trust in the deployment process.
+</Warning>
+
+```solidity
+// ⚠️ RISKY: Sending funds before deployment
+address predicted = factory.getDepositAddress(dest, depositor);
+USDC.transfer(predicted, 100e6);
+
+// If factory is malicious or has a bug, funds could be lost!
+
+// ✅ SAFER: Deploy first, then send
+address deployed = factory.deploy(dest, depositor);
+USDC.transfer(deployed, 100e6);
+```
+
+## Gas Optimization
+
+### View Functions Don't Deploy
+
+```solidity
+// ✅ No gas cost - pure computation
+address vault = portal.intentVaultAddress(intent);
+
+// ✅ No deployment - just checks balance
+bool funded = portal.isIntentFunded(intent);
+
+// ❌ Deploys vault (costs gas)
+portal.withdraw(destination, routeHash, reward);
+```
+
+### Minimal Proxy Gas Costs
+
+```solidity
+// Deploying a minimal proxy (via Clones.clone)
+// Cost: ~50,000 gas
+
+// vs. deploying a full Vault contract
+// Cost: ~500,000 gas
+
+// Savings: ~90% per deployment
+```
+
+### Lazy Deployment Savings
+
+```javascript
+// Scenario: 1000 intents published, 800 fulfilled
+
+// Without lazy deployment:
+// 1000 vaults deployed = 1000 × 50,000 gas = 50M gas
+
+// With lazy deployment:
+// 800 vaults deployed = 800 × 50,000 gas = 40M gas
+// Savings: 10M gas (20%)
+
+// Unfulfilled intents never need vault deployment!
+```
+
+<Accordion title="Can I predict addresses off-chain?">
+Yes! You can compute CREATE2 addresses using the same formula:
+
+```javascript
+const { keccak256, solidityPack } = require('ethers').utils;
+
+function predictVaultAddress(
+    implementationAddr,
+    deployerAddr,
+    intentHash,
+    prefix = '0xff'
+) {
+    const initCodeHash = keccak256(
+        solidityPack(
+            ['bytes', 'bytes'],
+            [
+                proxyCreationCode,
+                abiCoder.encode(['address'], [implementationAddr])
+            ]
+        )
+    );
+    
+    const create2Hash = keccak256(
+        solidityPack(
+            ['bytes1', 'address', 'bytes32', 'bytes32'],
+            [prefix, deployerAddr, intentHash, initCodeHash]
+        )
+    );
+    
+    return '0x' + create2Hash.slice(-40);
+}
+```
+</Accordion>
+
+<Accordion title="What happens if I send to the wrong address?">
+If you send funds to a deposit address with wrong parameters:
+- The address won't match any intent creation
+- Backend won't detect it (monitors specific addresses)
+- Funds will sit there until manually recovered
+
+**Solution**: Always verify the address with the factory before sending.
+</Accordion>
+
+<Accordion title="Can CREATE2 addresses be reused?">
+No! Once a contract is deployed to an address, it cannot be redeployed (even after `selfdestruct` in some cases). This is a security feature preventing address reuse attacks.
+
+For deposit addresses: Each user gets a unique address based on destination + depositor, so reuse isn't an issue.
+
+For vaults: Each intent gets a unique vault based on intentHash, ensuring isolation.
+</Accordion>
+
+<Accordion title="How do I verify a predicted address?">
+```solidity
+// On-chain verification
+address predicted = portal.intentVaultAddress(intent);
+portal.publish(intent);  // Creates intent
+
+// Verify it matches
+address actual = portal.intentVaultAddress(intent);
+assert(predicted == actual);  // ✅ Always true (deterministic)
+
+// Check if deployed
+bool deployed = actual.code.length > 0;
+```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deposit Addresses" icon="inbox" href="/advanced/deposit-addresses">
+    See CREATE2 in action with deposit addresses
+  </Card>
+  <Card title="Security Model" icon="shield" href="/advanced/security">
+    Learn how deterministic addresses enhance security
+  </Card>
+</CardGroup>

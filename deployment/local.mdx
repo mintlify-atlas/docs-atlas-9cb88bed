@@ -1,0 +1,308 @@
+---
+title: 'Local Development Deployment'
+description: 'Deploy Eco Routes Protocol to local development environment'
+---
+
+Local deployment allows you to test the Eco Routes Protocol in a controlled environment before deploying to testnets or mainnet.
+
+## Prerequisites
+
+### Required Tools
+
+<Steps>
+  <Step title="Install Node.js">
+    ```bash
+    # Install nvm (Node Version Manager)
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+
+    # Install and use Node.js v18.20.3
+    nvm install v18.20.3
+    nvm use v18.20.3
+    ```
+  </Step>
+  <Step title="Install Yarn">
+    ```bash
+    npm install -g yarn@1.22.19
+    ```
+  </Step>
+  <Step title="Install Foundry">
+    ```bash
+    # Install Foundry
+    curl -L https://foundry.paradigm.xyz | bash
+    foundryup
+    ```
+  </Step>
+</Steps>
+
+### Clone and Setup
+
+```bash
+git clone https://github.com/eco/eco-routes.git
+cd eco-routes
+
+# Install dependencies
+yarn install
+
+# Build contracts
+yarn build
+```
+
+## Local Environment Setup
+
+### Start Local Chain
+
+Start a local Ethereum node using Anvil (part of Foundry):
+
+```bash
+# Start Anvil with default configuration
+anvil
+
+# Or with custom configuration
+anvil --port 8545 --chain-id 31337 --block-time 2
+```
+
+Anvil will output:
+- Available accounts with private keys
+- Chain ID
+- RPC endpoint (default: `http://127.0.0.1:8545`)
+
+### Configure Environment
+
+Create a `.env` file for local deployment:
+
+```bash .env
+# Use one of Anvil's default private keys
+PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+# Local RPC endpoint
+RPC_URL=http://127.0.0.1:8545
+
+# Chain data (optional for local testing)
+CHAIN_DATA_URL="./chain-data-local.json"
+
+# Deployment output file
+DEPLOY_FILE="out/deploy-local.csv"
+
+# Salt for deterministic deployment
+SALT=0x88f72b566ae0c96f6fffac4bc8ac74909f61512ac0c06a8124d5ed420d306f90
+
+# Portal configuration (leave empty to deploy new Portal)
+PORTAL_CONTRACT=
+
+# Bridge contracts (optional - deploy mock bridges for testing)
+MAILBOX_CONTRACT=
+ROUTER_CONTRACT=
+LAYERZERO_ENDPOINT=
+POLYMER_CROSS_L2_PROVER_V2=
+```
+
+## Deployment Methods
+
+### Method 1: Direct Forge Script
+
+Deploy using Foundry's forge script directly:
+
+```bash
+# Deploy all contracts locally
+forge script script/Deploy.s.sol --broadcast --rpc-url localhost
+
+# Or with explicit RPC URL
+forge script script/Deploy.s.sol \
+  --broadcast \
+  --rpc-url http://127.0.0.1:8545
+```
+
+### Method 2: Using Deployment Script
+
+For multi-chain local testing (e.g., two Anvil instances):
+
+```bash
+# Create local chain data file
+cat > chain-data-local.json << 'EOF'
+{
+  "31337": {
+    "url": "http://127.0.0.1:8545",
+    "mailbox": "0x0000000000000000000000000000000000000000",
+    "router": "0x0000000000000000000000000000000000000000"
+  },
+  "31338": {
+    "url": "http://127.0.0.1:8546",
+    "mailbox": "0x0000000000000000000000000000000000000000",
+    "router": "0x0000000000000000000000000000000000000000"
+  }
+}
+EOF
+
+# Run deployment script
+./scripts/deployRoutes.sh
+```
+
+### Method 3: Minimal Portal-Only Deployment
+
+Deploy only the Portal contract for basic testing:
+
+```bash
+# Set minimal environment
+export SALT=0x88f72b566ae0c96f6fffac4bc8ac74909f61512ac0c06a8124d5ed420d306f90
+export DEPLOY_FILE="out/deploy-local.csv"
+export PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+# Deploy Portal only
+forge script scripts/Deploy.s.sol \
+  --broadcast \
+  --rpc-url http://127.0.0.1:8545
+```
+
+## Verify Deployment
+
+### Check Deployed Contracts
+
+After deployment, verify the contracts were deployed:
+
+```bash
+# Check deployment output file
+cat out/deploy-local.csv
+```
+
+Expected output:
+```csv
+ChainID,ContractAddress,ContractPath,ContractArguments
+31337,0x742d35Cc6634C0532925a3b844Bc454e4438f44e,contracts/Portal.sol:Portal,0x
+```
+
+### Interact with Deployed Contracts
+
+Use cast to interact with deployed contracts:
+
+```bash
+# Get Portal address from deployment file
+PORTAL_ADDRESS=$(grep "Portal" out/deploy-local.csv | cut -d',' -f2)
+
+# Check Portal deployment
+cast code $PORTAL_ADDRESS --rpc-url http://127.0.0.1:8545
+
+# Call a view function (example)
+cast call $PORTAL_ADDRESS "claimant()" --rpc-url http://127.0.0.1:8545
+```
+
+## Testing Against Local Deployment
+
+### Run Integration Tests
+
+Run tests against the deployed contracts:
+
+```bash
+# Run all tests against local deployment
+forge test --rpc-url http://127.0.0.1:8545
+
+# Run specific test file
+forge test --match-contract PortalTest --rpc-url http://127.0.0.1:8545
+
+# Run with verbose output
+forge test -vvv --rpc-url http://127.0.0.1:8545
+```
+
+### Manual Testing Workflow
+
+<Steps>
+  <Step title="Deploy Contracts">
+    Deploy the protocol contracts to your local Anvil instance.
+  </Step>
+  <Step title="Fund Test Accounts">
+    Anvil provides pre-funded accounts. Use these for testing intents.
+  </Step>
+  <Step title="Create Intent">
+    Use cast or scripts to create a test intent on the Portal.
+    
+    ```bash
+    cast send $PORTAL_ADDRESS "publish(...)" \
+      --private-key $PRIVATE_KEY \
+      --rpc-url http://127.0.0.1:8545
+    ```
+  </Step>
+  <Step title="Fund Intent">
+    Fund the intent with reward tokens.
+  </Step>
+  <Step title="Fulfill Intent">
+    Execute the intent fulfillment from a solver account.
+  </Step>
+  <Step title="Verify State">
+    Check contract state to verify the intent lifecycle.
+  </Step>
+</Steps>
+
+## Development Workflow
+
+### Iterative Development
+
+For rapid development iteration:
+
+```bash
+# Terminal 1: Keep Anvil running
+anvil
+
+# Terminal 2: Make code changes, then redeploy
+yarn build
+forge script script/Deploy.s.sol --broadcast --rpc-url localhost
+
+# Run tests
+forge test --rpc-url localhost
+```
+
+### Reset Local State
+
+To start fresh:
+
+```bash
+# Stop Anvil (Ctrl+C)
+# Restart Anvil (this resets blockchain state)
+anvil
+
+# Redeploy contracts
+forge script script/Deploy.s.sol --broadcast --rpc-url localhost
+```
+
+## Common Issues
+
+### Port Already in Use
+
+If port 8545 is already in use:
+
+```bash
+# Use a different port
+anvil --port 8546
+
+# Update RPC URL in commands
+forge script script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8546
+```
+
+### Nonce Too High Error
+
+If you get nonce errors after restarting Anvil:
+
+- This happens because Anvil resets but your deployment script remembers the old nonce
+- Restart Anvil to reset the blockchain state
+- Or use `--reset` flag when running forge script
+
+### Gas Estimation Failed
+
+If deployment fails with gas estimation errors:
+
+```bash
+# Deploy with explicit gas limit
+forge script script/Deploy.s.sol \
+  --broadcast \
+  --rpc-url localhost \
+  --gas-limit 10000000
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Run Tests" icon="flask" href="/guides/setup">
+    Run the test suite against your local deployment
+  </Card>
+  <Card title="Testnet Deployment" icon="cloud" href="/deployment/testnet">
+    Deploy to public testnets after local testing
+  </Card>
+</CardGroup>

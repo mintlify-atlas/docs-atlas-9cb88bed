@@ -1,0 +1,53 @@
+---
+title: "Portal"
+description: "Portal contract combining IntentSource and Inbox functionality"
+---
+
+## Overview
+
+The Portal contract is the main entry point for intent publishing, fulfillment, and proving. It combines the functionality of both IntentSource (for the source chain) and Inbox (for the destination chain) into a unified interface.
+
+**Inherits:** IntentSource, Inbox, Semver
+
+**Contract Location:** `contracts/Portal.sol`
+
+<Note>
+The Portal contract inherits all methods from IntentSource and Inbox. This means a single Portal deployment can handle both source chain operations (publishing intents, funding rewards) and destination chain operations (fulfilling intents).
+</Note>
+
+## Constructor
+
+### Portal()
+
+```solidity
+constructor()
+```
+
+Initializes the Portal contract, creating a unified entry point combining source and destination chain functionality.
+
+## Inherited Methods
+
+The Portal contract inherits all public and external methods from:
+
+- **[IntentSource](/api/intent-source)** - Methods for publishing and funding intents on the source chain
+- **[Inbox](/api/inbox)** - Methods for fulfilling intents on the destination chain
+
+## Usage Example
+
+```solidity
+// Deploy Portal (acts as both source and destination)
+Portal portal = new Portal();
+
+// Source chain: Publish and fund an intent
+(bytes32 intentHash, address vault) = portal.publishAndFund{
+    value: 0.1 ether
+}(intent, false);
+
+// Destination chain: Fulfill the intent
+bytes[] memory results = portal.fulfill(
+    intentHash,
+    route,
+    rewardHash,
+    claimant
+);
+```

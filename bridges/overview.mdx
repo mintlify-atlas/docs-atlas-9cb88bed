@@ -1,0 +1,190 @@
+---
+title: Bridge Integration Overview
+description: Multi-bridge architecture for cross-chain intent proving
+---
+
+Eco Routes Protocol supports multiple bridge providers for proving intent fulfillment across chains. Each prover implementation enables secure cross-chain message passing to verify that intents have been fulfilled on destination chains.
+
+## Available Bridge Provers
+
+The protocol implements four distinct bridge integrations:
+
+<CardGroup cols={2}>
+  <Card title="Hyperlane" icon="bridge" href="/bridges/hyperlane">
+    HyperProver - Cross-chain messaging via Hyperlane mailbox
+  </Card>
+  
+  <Card title="LayerZero" icon="bridge" href="/bridges/layerzero">
+    LayerZeroProver - V2 endpoint integration for cross-chain proofs
+  </Card>
+  
+  <Card title="Metalayer" icon="bridge" href="/bridges/metalayer">
+    MetaProver - Caldera Metalayer router-based proving
+  </Card>
+  
+  <Card title="Polymer" icon="bridge" href="/bridges/polymer">
+    PolymerProver - Event-based proving with CrossL2ProverV2
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+All message-based provers (Hyperlane, LayerZero, Metalayer) extend from a common base:
+
+```solidity
+BaseProver
+  └── MessageBridgeProver
+        ├── HyperProver
+        ├── LayerZeroProver
+        └── MetaProver
+```
+
+PolymerProver uses a different architecture based on event proving:
+
+```solidity
+BaseProver
+  └── PolymerProver
+```
+
+### Common Base Functionality
+
+All provers inherit from `BaseProver.sol` which provides:
+
+- **Proof Storage**: Mapping from intent hash to proof data (claimant + destination)
+- **Challenge Mechanism**: Anyone can invalidate proofs with mismatched destination chain IDs
+- **Portal Integration**: Immutable reference to the Portal contract
+
+```solidity contracts/prover/BaseProver.sol
+mapping(bytes32 => ProofData) internal _provenIntents;
+
+struct ProofData {
+    address claimant;
+    uint64 destination;
+}
+```
+
+## Domain IDs vs Chain IDs
+
+<Warning>
+  **Critical**: Domain IDs are NOT the same as chain IDs. Each bridge provider uses their own domain ID mapping system.
+</Warning>
+
+When calling prover functions, you must use the bridge-specific domain ID:
+
+- **Hyperlane**: Custom domain IDs (e.g., Ethereum = 1, Polygon = 137, but check Hyperlane docs)
+- **LayerZero**: Endpoint IDs (EIDs) that differ from chain IDs
+- **Metalayer**: Metalayer-specific domain IDs
+- **Polymer**: Uses actual chain IDs
+
+From `Inbox.sol:144-151`:
+
+```solidity contracts/Inbox.sol
+/**
+ * @dev WARNING: sourceChainDomainID is NOT necessarily the same as chain ID.
+ *      Each bridge provider uses their own domain ID mapping system:
+ *      - Hyperlane: Uses custom domain IDs that may differ from chain IDs
+ *      - LayerZero: Uses endpoint IDs that map to chains differently
+ *      - Metalayer: Uses domain IDs specific to their routing system
+ *      - Polymer: Uses chainIDs
+ */
+```
+
+## Common Prove Function
+
+All message-based provers implement this signature from `MessageBridgeProver.sol:112-117`:
+
+```solidity contracts/prover/MessageBridgeProver.sol
+function prove(
+    address sender,
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) external payable;
+```
+
+### Parameters
+
+<ParamField path="sender" type="address">
+  Address that initiated the proving request (receives refunds)
+</ParamField>
+
+<ParamField path="domainID" type="uint64">
+  Bridge-specific domain ID of the source chain (where intent was created)
+</ParamField>
+
+<ParamField path="encodedProofs" type="bytes">
+  Encoded (intentHash, claimant) pairs. Format: 8-byte chain ID + (32-byte hash + 32-byte claimant) pairs
+</ParamField>
+
+<ParamField path="data" type="bytes">
+  Bridge-specific encoded data for message formatting. Structure varies by prover implementation.
+</ParamField>
+
+## Fee Calculation
+
+All provers implement `fetchFee()` to calculate cross-chain messaging costs:
+
+```solidity
+function fetchFee(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) public view returns (uint256);
+```
+
+The `prove()` function automatically:
+1. Calculates required fee via `fetchFee()`
+2. Validates `msg.value >= fee`
+3. Refunds excess payment to sender
+
+## Message Flow
+
+1. **Destination Chain**: Intent is fulfilled via `Inbox.fulfillAndProve()`
+2. **Proof Encoding**: Intent hash and claimant are encoded with chain ID prefix
+3. **Bridge Dispatch**: Prover sends message to source chain via bridge
+4. **Source Chain**: Prover receives message and stores proof
+5. **Reward Claim**: Portal validates proof and distributes rewards
+
+## Security Features
+
+### Whitelist Protection
+
+All message-based provers use whitelisting to prevent unauthorized proof submissions:
+
+```solidity contracts/prover/MessageBridgeProver.sol
+if (!isWhitelisted(messageSender)) {
+    revert UnauthorizedIncomingProof(messageSender);
+}
+```
+
+### Proof Challenge
+
+Anyone can challenge invalid proofs (from `BaseProver.sol:112-129`):
+
+```solidity contracts/prover/BaseProver.sol
+function challengeIntentProof(
+    uint64 destination,
+    bytes32 routeHash,
+    bytes32 rewardHash
+) external {
+    bytes32 intentHash = keccak256(
+        abi.encodePacked(destination, routeHash, rewardHash)
+    );
+    
+    ProofData memory proof = _provenIntents[intentHash];
+    
+    if (proof.claimant != address(0) && proof.destination != destination) {
+        delete _provenIntents[intentHash];
+        emit IntentProofInvalidated(intentHash);
+    }
+}
+```
+
+## Next Steps
+
+Explore the specific integration guides for each bridge provider:
+
+- [Hyperlane Integration](/bridges/hyperlane)
+- [LayerZero Integration](/bridges/layerzero)
+- [Metalayer Integration](/bridges/metalayer)
+- [Polymer Integration](/bridges/polymer)

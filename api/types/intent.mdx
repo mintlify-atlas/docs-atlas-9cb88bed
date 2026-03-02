@@ -1,0 +1,400 @@
+---
+title: 'Intent & OrderData'
+description: 'Core data structures for defining cross-chain intents in Eco Routes Protocol'
+---
+
+## Overview
+
+Intents are the fundamental building blocks of Eco Routes Protocol, representing complete cross-chain execution requests. This page documents the `Intent` struct and related types, as well as the ERC-7683 compliant `OrderData` structure.
+
+**Type Location:** `contracts/types/Intent.sol`
+
+---
+
+## Intent
+
+```solidity
+struct Intent {
+    uint64 destination;
+    Route route;
+    Reward reward;
+}
+```
+
+Complete cross-chain intent combining routing and reward information.
+
+### Fields
+
+<ParamField path="destination" type="uint64">
+  Target chain ID where the intent should be executed. This identifies the destination blockchain using standard EVM chain IDs.
+
+  **Examples:**
+  - `1` - Ethereum Mainnet
+  - `42161` - Arbitrum One
+  - `10` - OP Mainnet
+  - `8453` - Base
+</ParamField>
+
+<ParamField path="route" type="Route">
+  Routing and execution instructions for the destination chain. Contains all information needed to execute the cross-chain message, including:
+  - Salt for uniqueness
+  - Execution deadline
+  - Portal contract address
+  - Native token amount
+  - Required ERC20 tokens
+  - Contract calls to execute
+
+  See [Route Type](/api/types/route) for detailed structure.
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward and validation parameters for the intent. Defines who can execute the intent, what they receive, and when. Includes:
+  - Execution deadline
+  - Creator address
+  - Prover address
+  - Native token rewards
+  - ERC20 token rewards
+
+  See [Reward Type](/api/types/reward) for detailed structure.
+</ParamField>
+
+### Intent Hash Calculation
+
+Intents are uniquely identified by their hash:
+
+```solidity
+bytes32 intentHash = keccak256(
+    abi.encodePacked(
+        destination,
+        keccak256(abi.encode(route)),
+        keccak256(abi.encode(reward))
+    )
+);
+```
+
+This hash is used as the `orderId` in ERC-7683 events and throughout the protocol.
+
+### Usage Example
+
+```solidity
+Intent memory intent = Intent({
+    destination: 42161, // Arbitrum One
+    route: Route({
+        salt: keccak256(abi.encodePacked("my-unique-intent")),
+        deadline: uint64(block.timestamp + 1 hours),
+        portal: 0x1234..., // Portal address on Arbitrum
+        nativeAmount: 0.1 ether,
+        tokens: tokenAmounts,
+        calls: calls
+    }),
+    reward: Reward({
+        deadline: uint64(block.timestamp + 2 hours),
+        creator: msg.sender,
+        prover: 0x5678..., // Prover address
+        nativeAmount: 0.01 ether,
+        tokens: rewardTokens
+    })
+});
+```
+
+---
+
+## OrderData
+
+```solidity
+struct OrderData {
+    uint64 destination;
+    bytes route;
+    Reward reward;
+    bytes32 routePortal;
+    uint64 routeDeadline;
+    Output[] maxSpent;
+}
+```
+
+ERC-7683 compliant order data structure that contains everything needed to publish an intent via the ERC-7683 interface. This is the decoded content of the `orderData` field in `GaslessCrossChainOrder` and `OnchainCrossChainOrder`.
+
+**Type Location:** `contracts/types/ERC7683.sol`
+
+### Fields
+
+<ParamField path="destination" type="uint64">
+  Destination chain ID for the intent (same as `Intent.destination`)
+</ParamField>
+
+<ParamField path="route" type="bytes">
+  ABI-encoded `Route` struct containing execution instructions for the destination chain.
+
+  **Encoding:**
+  ```solidity
+  bytes memory routeData = abi.encode(route);
+  ```
+</ParamField>
+
+<ParamField path="reward" type="Reward">
+  Reward structure containing creator, prover, amounts, and deadline information (same as `Intent.reward`)
+</ParamField>
+
+<ParamField path="routePortal" type="bytes32">
+  Portal contract address on the destination chain, encoded as `bytes32` for ERC-7683 compatibility.
+
+  **Encoding:**
+  ```solidity
+  bytes32 routePortal = bytes32(uint256(uint160(portalAddress)));
+  ```
+
+  This is extracted from `route.portal` but stored separately for efficient ERC-7683 resolution.
+</ParamField>
+
+<ParamField path="routeDeadline" type="uint64">
+  Deadline for route execution on the destination chain (extracted from `route.deadline`)
+</ParamField>
+
+<ParamField path="maxSpent" type="Output[]">
+  Maximum outputs that the filler will send on the destination chain. This represents the upper bound on what the solver must provide to fulfill the intent.
+
+  Each `Output` contains:
+  - `token`: Token address as `bytes32` (or `bytes32(0)` for native token)
+  - `amount`: Token amount
+  - `recipient`: Recipient address as `bytes32`
+  - `chainId`: Destination chain ID
+
+  See [Output Type](#output) below for details.
+</ParamField>
+
+### EIP-712 Type Hash
+
+```solidity
+bytes32 constant ORDER_DATA_TYPEHASH = keccak256(
+    "OrderData(uint64 destination,bytes route,Reward reward,bytes32 routePortal,uint64 routeDeadline,Output[] maxSpent)Reward(uint64 deadline,address creator,address prover,uint256 nativeAmount,TokenAmount[] tokens)TokenAmount(address token,uint256 amount)Output(bytes32 token,uint256 amount,bytes32 recipient,uint256 chainId)"
+);
+```
+
+This type hash is used for EIP-712 signature verification in gasless orders.
+
+### Usage in ERC-7683 Orders
+
+**Onchain Order:**
+```solidity
+OrderData memory orderData = OrderData({
+    destination: 42161,
+    route: abi.encode(routeStruct),
+    reward: rewardStruct,
+    routePortal: bytes32(uint256(uint160(portalAddress))),
+    routeDeadline: uint64(block.timestamp + 1 hours),
+    maxSpent: maxSpentOutputs
+});
+
+OnchainCrossChainOrder memory order = OnchainCrossChainOrder({
+    fillDeadline: uint32(block.timestamp + 1 hours),
+    orderDataType: ORDER_DATA_TYPEHASH,
+    orderData: abi.encode(orderData)
+});
+
+originSettler.open{value: rewardAmount}(order);
+```
+
+**Gasless Order:**
+```solidity
+GaslessCrossChainOrder memory order = GaslessCrossChainOrder({
+    originSettler: address(originSettlerContract),
+    user: userAddress,
+    nonce: userNonce,
+    originChainId: block.chainid,
+    openDeadline: uint32(block.timestamp + 30 minutes),
+    fillDeadline: uint32(block.timestamp + 1 hours),
+    orderDataType: ORDER_DATA_TYPEHASH,
+    orderData: abi.encode(orderData)
+});
+
+// User signs the order
+bytes memory signature = signOrder(order, userPrivateKey);
+
+// Solver opens the order
+originSettler.openFor(order, signature, "");
+```
+
+---
+
+## Supporting Types
+
+### Call
+
+```solidity
+struct Call {
+    address target;
+    bytes data;
+    uint256 value;
+}
+```
+
+Represents a single contract call with encoded function data. Used in the `Route.calls` array to define execution instructions.
+
+<ParamField path="target" type="address">
+  The contract address to call on the destination chain
+</ParamField>
+
+<ParamField path="data" type="bytes">
+  ABI-encoded function call data
+
+  **Example:**
+  ```solidity
+  bytes memory data = abi.encodeWithSelector(
+      IERC20.transfer.selector,
+      recipientAddress,
+      amount
+  );
+  ```
+</ParamField>
+
+<ParamField path="value" type="uint256">
+  Amount of native tokens (wei) to send with the call
+</ParamField>
+
+**Usage Example:**
+```solidity
+Call memory swapCall = Call({
+    target: uniswapRouterAddress,
+    data: abi.encodeWithSelector(
+        ISwapRouter.exactInputSingle.selector,
+        swapParams
+    ),
+    value: 0
+});
+```
+
+---
+
+### TokenAmount
+
+```solidity
+struct TokenAmount {
+    address token;
+    uint256 amount;
+}
+```
+
+Represents a token amount pair. Used in both `Route` and `Reward` structs to specify ERC20 token transfers.
+
+<ParamField path="token" type="address">
+  Address of the ERC20 token contract
+</ParamField>
+
+<ParamField path="amount" type="uint256">
+  Amount of tokens in the token's smallest unit (wei for 18-decimal tokens)
+
+  **Note:** Always use the token's native decimals. For USDC (6 decimals), 1 USDC = 1000000
+</ParamField>
+
+**Usage Example:**
+```solidity
+TokenAmount[] memory tokens = new TokenAmount[](2);
+tokens[0] = TokenAmount({
+    token: usdcAddress,
+    amount: 1000 * 10**6  // 1000 USDC (6 decimals)
+});
+tokens[1] = TokenAmount({
+    token: daiAddress,
+    amount: 500 * 10**18  // 500 DAI (18 decimals)
+});
+```
+
+---
+
+### Output
+
+```solidity
+struct Output {
+    bytes32 token;
+    uint256 amount;
+    bytes32 recipient;
+    uint256 chainId;
+}
+```
+
+ERC-7683 compliant output specification. Used in `ResolvedCrossChainOrder` for both `maxSpent` and `minReceived` arrays.
+
+**Type Location:** `contracts/types/ERC7683.sol`
+
+<ParamField path="token" type="bytes32">
+  Token address encoded as `bytes32`. Use `bytes32(0)` for native tokens.
+
+  **Encoding:**
+  ```solidity
+  bytes32 token = bytes32(uint256(uint160(tokenAddress)));
+  bytes32 nativeToken = bytes32(0);
+  ```
+</ParamField>
+
+<ParamField path="amount" type="uint256">
+  Amount of tokens to be sent or received
+</ParamField>
+
+<ParamField path="recipient" type="bytes32">
+  Recipient address encoded as `bytes32`. Use `bytes32(0)` when recipient is not known at order creation (will be the filler).
+
+  **Encoding:**
+  ```solidity
+  bytes32 recipient = bytes32(uint256(uint160(recipientAddress)));
+  bytes32 unknownRecipient = bytes32(0);
+  ```
+</ParamField>
+
+<ParamField path="chainId" type="uint256">
+  Chain ID where this output should be sent/received
+
+  **Usage:**
+  - For `maxSpent`: destination chain ID
+  - For `minReceived`: origin chain ID (where rewards are escrowed)
+</ParamField>
+
+**Usage Example:**
+```solidity
+Output[] memory maxSpent = new Output[](2);
+maxSpent[0] = Output({
+    token: bytes32(uint256(uint160(usdcAddress))),
+    amount: 1000 * 10**6,
+    recipient: bytes32(uint256(uint160(receiverAddress))),
+    chainId: 42161  // Arbitrum
+});
+maxSpent[1] = Output({
+    token: bytes32(0),  // Native ETH
+    amount: 0.1 ether,
+    recipient: bytes32(uint256(uint160(receiverAddress))),
+    chainId: 42161
+});
+```
+
+---
+
+## Design Considerations
+
+### Why Separate Intent and OrderData?
+
+- **Intent**: Internal protocol representation optimized for on-chain processing
+- **OrderData**: ERC-7683 compliant format for standardized cross-protocol interoperability
+
+`OrderData` adds ERC-7683 specific fields (`routePortal`, `routeDeadline`, `maxSpent`) while keeping core intent data.
+
+### Why Encode Route as Bytes in OrderData?
+
+Encoding the `Route` as `bytes` in `OrderData` provides:
+1. **Flexibility**: Route structure can evolve without breaking ERC-7683 interface
+2. **Gas Efficiency**: Single encoding operation instead of individual field access
+3. **Standardization**: Conforms to ERC-7683's implementation-specific `orderData` design
+
+### Intent Hash Security
+
+The intent hash uses `keccak256(abi.encodePacked(...))` with pre-hashed route and reward to:
+- Prevent hash collisions from malicious input ordering
+- Ensure consistent hashing across protocol implementations
+- Support efficient on-chain verification
+
+---
+
+## Related Types
+
+- [Route](/api/types/route) - Routing and execution instructions
+- [Reward](/api/types/reward) - Reward and validation parameters
+- [OriginSettler](/api/erc7683/origin-settler) - Uses OrderData for order creation
+- [DestinationSettler](/api/erc7683/destination-settler) - Uses Route for execution
