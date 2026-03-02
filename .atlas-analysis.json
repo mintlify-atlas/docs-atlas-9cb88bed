@@ -1,0 +1,158 @@
+{
+  "projectType": "framework",
+  "projectName": "Eco Routes Protocol",
+  "projectDescription": "A decentralized, intent-based protocol for cross-chain transactions with multi-bridge support and ERC-7683 compatibility.",
+  "theme": "aspen",
+  "primaryColor": "#10B981",
+  "lightColor": "#34D399",
+  "darkColor": "#059669",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/intents",
+              "concepts/users-solvers-provers",
+              "concepts/intent-lifecycle",
+              "concepts/cross-chain-compatibility"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/setup",
+              "guides/creating-intents",
+              "guides/fulfilling-intents",
+              "guides/proving-intents",
+              "guides/erc7683-integration"
+            ]
+          },
+          {
+            "group": "Bridge Integration",
+            "pages": [
+              "bridges/overview",
+              "bridges/hyperlane",
+              "bridges/layerzero",
+              "bridges/metalayer",
+              "bridges/polymer"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/deposit-addresses",
+              "advanced/cross-vm-support",
+              "advanced/security",
+              "advanced/deterministic-addresses"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Contracts",
+            "pages": [
+              "api/portal",
+              "api/intent-source",
+              "api/inbox",
+              "api/vault",
+              "api/executor"
+            ]
+          },
+          {
+            "group": "Provers",
+            "pages": [
+              "api/provers/base-prover",
+              "api/provers/hyper-prover",
+              "api/provers/layerzero-prover",
+              "api/provers/meta-prover",
+              "api/provers/polymer-prover",
+              "api/provers/local-prover"
+            ]
+          },
+          {
+            "group": "ERC-7683",
+            "pages": [
+              "api/erc7683/origin-settler",
+              "api/erc7683/destination-settler"
+            ]
+          },
+          {
+            "group": "Types & Interfaces",
+            "pages": [
+              "api/types/intent",
+              "api/types/route",
+              "api/types/reward"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/utils/typescript-sdk",
+              "api/utils/address-converter",
+              "api/utils/encoding"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Deployment",
+        "groups": [
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/overview",
+              "deployment/local",
+              "deployment/testnet",
+              "deployment/mainnet",
+              "deployment/verification"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Cross-chain intent-based transactions",
+    "ERC-7683 standard compatibility",
+    "Multi-bridge support (Hyperlane, LayerZero, Metalayer, Polymer)",
+    "Deterministic vault system for reward escrow",
+    "Solver incentive mechanism",
+    "Cross-VM compatibility (EVM and Solana)",
+    "Secure batch call execution",
+    "Permit-based gasless approvals"
+  ],
+  "publicApiSurface": [
+    "Portal.publish()",
+    "Portal.fund()",
+    "Portal.fulfill()",
+    "Portal.prove()",
+    "Portal.withdraw()",
+    "Portal.refund()",
+    "IntentSource.getIntentHash()",
+    "IntentSource.getRewardStatus()",
+    "Inbox.fulfill()",
+    "Inbox.fulfillAndProve()",
+    "EcoERC7683OriginSettler.open()",
+    "EcoERC7683OriginSettler.resolve()",
+    "EcoERC7683DestinationSettler.fill()",
+    "HyperProver.prove()",
+    "LayerZeroProver.prove()",
+    "MetaProver.prove()",
+    "PolymerProver.prove()",
+    "LocalProver.prove()"
+  ]
+}
