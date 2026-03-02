@@ -7,7 +7,7 @@ Eco Routes Protocol supports multiple bridge providers for proving intent fulfil
 
 ## Available Bridge Provers
 
-The protocol implements four distinct bridge integrations:
+The protocol implements five distinct bridge integrations:
 
 <CardGroup cols={2}>
   <Card title="Hyperlane" icon="bridge" href="/bridges/hyperlane">
@@ -16,6 +16,10 @@ The protocol implements four distinct bridge integrations:
   
   <Card title="LayerZero" icon="bridge" href="/bridges/layerzero">
     LayerZeroProver - V2 endpoint integration for cross-chain proofs
+  </Card>
+  
+  <Card title="Chainlink CCIP" icon="link" href="/bridges/ccip">
+    CCIPProver - Decentralized oracle network for reliable cross-chain proving
   </Card>
   
   <Card title="Metalayer" icon="bridge" href="/bridges/metalayer">
@@ -29,13 +33,14 @@ The protocol implements four distinct bridge integrations:
 
 ## Architecture Overview
 
-All message-based provers (Hyperlane, LayerZero, Metalayer) extend from a common base:
+All message-based provers (Hyperlane, LayerZero, CCIP, Metalayer) extend from a common base:
 
 ```solidity
 BaseProver
   └── MessageBridgeProver
         ├── HyperProver
         ├── LayerZeroProver
+        ├── CCIPProver
         └── MetaProver
 ```
 
@@ -73,6 +78,7 @@ When calling prover functions, you must use the bridge-specific domain ID:
 
 - **Hyperlane**: Custom domain IDs (e.g., Ethereum = 1, Polygon = 137, but check Hyperlane docs)
 - **LayerZero**: Endpoint IDs (EIDs) that differ from chain IDs
+- **Chainlink CCIP**: Chain selectors (unique 64-bit identifiers per chain)
 - **Metalayer**: Metalayer-specific domain IDs
 - **Polymer**: Uses actual chain IDs
 

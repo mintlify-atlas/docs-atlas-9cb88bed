@@ -56,6 +56,7 @@
               "bridges/overview",
               "bridges/hyperlane",
               "bridges/layerzero",
+              "bridges/ccip",
               "bridges/metalayer",
               "bridges/polymer"
             ]
@@ -90,6 +91,7 @@
               "api/provers/base-prover",
               "api/provers/hyper-prover",
               "api/provers/layerzero-prover",
+              "api/provers/ccip-prover",
               "api/provers/meta-prover",
               "api/provers/polymer-prover",
               "api/provers/local-prover"

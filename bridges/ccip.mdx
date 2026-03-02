@@ -1,0 +1,339 @@
+---
+title: Chainlink CCIP
+description: Integrate Eco Routes with Chainlink CCIP for cross-chain proof delivery
+---
+
+# Chainlink CCIP Integration
+
+Chainlink's Cross-Chain Interoperability Protocol (CCIP) provides a decentralized, secure method for relaying intent fulfillment proofs between blockchains. The `CCIPProver` leverages Chainlink's oracle network for reliable cross-chain messaging.
+
+## Overview
+
+CCIP offers several advantages for cross-chain proving:
+
+- **Decentralized Security**: Multi-oracle verification with Risk Management Network
+- **Reliability**: Guaranteed message delivery with automatic retries
+- **Wide Network Support**: Available on 15+ EVM chains
+- **Message Tracking**: Built-in explorer for monitoring cross-chain transactions
+- **Active-Active Architecture**: No single point of failure
+
+## Contract Architecture
+
+```solidity
+CCIPProver
+├── ROUTER (CCIP Router address)
+├── MIN_GAS_LIMIT (minimum execution gas)
+└── Whitelist (authorized provers)
+```
+
+**Contract Location**: `contracts/prover/CCIPProver.sol`
+
+## Constructor Parameters
+
+```solidity
+constructor(
+    address router,        // CCIP Router for this chain
+    address portal,        // Portal contract address
+    bytes32[] memory provers,  // Whitelisted prover addresses
+    uint256 minGasLimit    // Minimum gas for execution (0 = 200k default)
+)
+```
+
+<ParamField path="router" type="address" required>
+  The CCIP Router contract address for the current chain. Find addresses in [CCIP documentation](https://docs.chain.link/ccip/supported-networks).
+</ParamField>
+
+<ParamField path="portal" type="address" required>
+  The Portal contract address on this chain.
+</ParamField>
+
+<ParamField path="provers" type="bytes32[]" required>
+  Array of whitelisted prover addresses on other chains. Use bytes32 format for cross-VM compatibility.
+</ParamField>
+
+<ParamField path="minGasLimit" type="uint256">
+  Minimum gas limit for cross-chain execution. Pass 0 to use the default 200,000 gas.
+</ParamField>
+
+## Proving Flow
+
+<Steps>
+  <Step title="Fulfill intent on destination chain">
+    A solver fulfills an intent on the destination chain via the Portal contract.
+  </Step>
+
+  <Step title="Call prove() on CCIPProver">
+    The prover or solver calls `prove()` on the destination chain's CCIPProver with payment for CCIP fees.
+
+    ```solidity
+    bytes memory encodedProofs = abi.encode(intentHashes, claimants);
+    bytes memory data = abi.encode(sourceChainProver, gasLimit);
+    
+    uint256 fee = ccipProver.fetchFee(sourceChainSelector, encodedProofs, data);
+    
+    ccipProver.prove{value: fee}(
+        intentHash,
+        sourceChainSelector,  // CCIP chain selector, not chain ID!
+        encodedProofs,
+        data
+    );
+    ```
+  </Step>
+
+  <Step title="CCIP delivers message">
+    Chainlink's oracle network validates and delivers the message to the source chain.
+  </Step>
+
+  <Step title="ccipReceive processes proof">
+    The source chain's CCIPProver receives the message via `ccipReceive()` and creates a proof record.
+  </Step>
+
+  <Step title="Withdraw rewards">
+    The solver can now call `withdraw()` on the source chain Portal to claim their rewards.
+  </Step>
+</Steps>
+
+## Chain Selectors vs Chain IDs
+
+<Warning>
+  CCIP uses **chain selectors**, not standard chain IDs. Always use the correct selector when calling `prove()`.
+</Warning>
+
+### Common Chain Selectors
+
+| Network | Chain ID | CCIP Chain Selector |
+|---------|----------|---------------------|
+| Ethereum Mainnet | 1 | 5009297550715157269 |
+| Ethereum Sepolia | 11155111 | 16015286601757825753 |
+| Polygon Mainnet | 137 | 4051577828743386545 |
+| Polygon Amoy | 80002 | 16281711391670634445 |
+| Arbitrum One | 42161 | 4949039107694359620 |
+| Arbitrum Sepolia | 421614 | 3478487238524512106 |
+| Optimism Mainnet | 10 | 3734403246176062136 |
+| Optimism Sepolia | 11155420 | 5224473277236331295 |
+| Base Mainnet | 8453 | 15971525489660198786 |
+| Base Sepolia | 84532 | 10344971235874465080 |
+| Avalanche C-Chain | 43114 | 6433500567565415381 |
+| Avalanche Fuji | 43113 | 14767482510784806043 |
+
+<Note>
+  Always verify selectors in the [official CCIP documentation](https://docs.chain.link/ccip/supported-networks) as they may change.
+</Note>
+
+## Data Parameter Structure
+
+The `data` parameter encodes information needed for cross-chain message delivery:
+
+```solidity
+struct UnpackedData {
+    address sourceChainProver;  // Prover address on source chain
+    uint256 gasLimit;           // Gas limit for execution
+}
+
+bytes memory data = abi.encode(sourceChainProver, gasLimit);
+```
+
+<ParamField path="sourceChainProver" type="address" required>
+  The CCIPProver contract address on the source chain where the proof will be delivered.
+</ParamField>
+
+<ParamField path="gasLimit" type="uint256" required>
+  Gas limit for proof processing on the source chain. Automatically enforced to be at least `MIN_GAS_LIMIT`. Maximum is 3,000,000 gas.
+</ParamField>
+
+## Fee Calculation
+
+CCIP fees depend on:
+- **Destination chain**: Different chains have different costs
+- **Gas limit**: Higher execution limits cost more
+- **Message size**: Larger proofs (up to 30KB) increase fees
+- **Network congestion**: Dynamic pricing based on demand
+
+```solidity
+// Query fee before sending
+uint256 fee = ccipProver.fetchFee(
+    destinationChainSelector,
+    encodedProofs,
+    data
+);
+
+// Include 10% buffer for gas price fluctuations
+uint256 feeWithBuffer = fee * 110 / 100;
+
+// Send proof with payment
+ccipProver.prove{value: feeWithBuffer}(
+    intentHash,
+    destinationChainSelector,
+    encodedProofs,
+    data
+);
+```
+
+<Tip>
+  Always add a fee buffer (5-10%) to account for gas price fluctuations between fee calculation and transaction execution.
+</Tip>
+
+## Message Limits
+
+<Warning>
+  CCIP has strict message limits that must be respected:
+</Warning>
+
+- **Maximum payload size**: 30 KB (30,720 bytes)
+- **Maximum gas limit**: 3,000,000 gas
+- **Minimum gas limit**: 200,000 gas (configurable via `minGasLimit`)
+
+If you need to prove many intents at once, batch them carefully to stay within the 30KB limit.
+
+## CCIP Router Addresses
+
+Each chain has its own CCIP Router contract. Here are key mainnet addresses:
+
+| Chain | Router Address |
+|-------|----------------|
+| Ethereum | `0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D` |
+| Polygon | `0x849c5ED5a80F5B408Dd4969b78c2C8fdf0565Bfe` |
+| Arbitrum | `0x141fa059441E0ca23ce184B6A78bafD2A517DdE8` |
+| Optimism | `0x261c05aFb2f581bC4119aee23A8E67947EaaC7c0` |
+| Base | `0x881e3A65B4d4a04dD529061dd0071cf975F58bCD` |
+| Avalanche | `0xF4c7E640EdA248ef95972845a62bdC74237805dB` |
+
+<Note>
+  Testnet router addresses are different. Check the [CCIP documentation](https://docs.chain.link/ccip/supported-networks) for current addresses.
+</Note>
+
+## Deployment Example
+
+```solidity
+// Deploy CCIPProver on destination chain
+address ccipRouter = 0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D; // Ethereum Router
+address portal = 0x...; // Portal on this chain
+
+// Whitelist the source chain prover
+bytes32[] memory provers = new bytes32[](1);
+provers[0] = bytes32(uint256(uint160(0x...))); // Source chain CCIPProver
+
+CCIPProver prover = new CCIPProver(
+    ccipRouter,
+    portal,
+    provers,
+    300000 // 300k minimum gas
+);
+
+// Deploy matching CCIPProver on source chain with reciprocal whitelist
+```
+
+## Monitoring and Debugging
+
+### CCIP Explorer
+
+Track your cross-chain messages using the [CCIP Explorer](https://ccip.chain.link/):
+
+1. Copy the transaction hash from your `prove()` call
+2. Enter it in the CCIP Explorer
+3. View message status: Pending, Success, or Failed
+4. See execution details and any error messages
+
+### Common Issues
+
+<Accordion title="Insufficient fee paid">
+  **Cause**: Gas prices increased between fee calculation and transaction execution.
+  
+  **Solution**: Always add a 5-10% buffer to the calculated fee.
+</Accordion>
+
+<Accordion title="Message execution failed">
+  **Cause**: Gas limit too low or invalid proof data.
+  
+  **Solution**: Increase gas limit in the `data` parameter or verify proof encoding.
+</Accordion>
+
+<Accordion title="Sender not whitelisted">
+  **Cause**: The destination chain prover is not in the source chain's whitelist.
+  
+  **Solution**: Add the prover address to the whitelist via contract upgrade or constructor.
+</Accordion>
+
+<Accordion title="Invalid chain selector">
+  **Cause**: Using chain ID instead of CCIP chain selector.
+  
+  **Solution**: Verify you're using the correct CCIP chain selector from the table above.
+</Accordion>
+
+## Security Considerations
+
+1. **Decentralized Oracles**: CCIP uses multiple independent oracles for message verification
+2. **Risk Management Network**: Additional security layer monitors for anomalies
+3. **Whitelist Enforcement**: Only approved provers can submit proofs
+4. **Router Authorization**: Only the CCIP Router can call `ccipReceive()`
+5. **Gas Limit Validation**: Enforces minimum gas to prevent execution failures
+
+## Best Practices
+
+- **Fee Estimation**: Always query fees with `fetchFee()` before proving
+- **Fee Buffer**: Add 5-10% buffer for gas price volatility
+- **Batch Proofs**: Combine multiple proofs to save on fixed CCIP costs
+- **Monitor Status**: Use CCIP Explorer to track message delivery
+- **Test First**: Verify on testnets before mainnet deployment
+- **Whitelist Management**: Keep prover whitelists synchronized across chains
+
+## Integration Example
+
+Complete example of integrating CCIP proving into your solver:
+
+```solidity
+contract MySolver {
+    CCIPProver public ccipProver;
+    Portal public portal;
+    
+    function fulfillAndProve(
+        Intent memory intent,
+        uint64 sourceChainSelector
+    ) external payable {
+        // 1. Fulfill intent on destination chain
+        portal.fulfill(intent.hash, intent.route, intent.rewardHash, msg.sender);
+        
+        // 2. Prepare proof data
+        bytes32[] memory intentHashes = new bytes32[](1);
+        intentHashes[0] = intent.hash;
+        
+        bytes32[] memory claimants = new bytes32[](1);
+        claimants[0] = bytes32(uint256(uint160(msg.sender)));
+        
+        bytes memory encodedProofs = abi.encode(intentHashes, claimants);
+        
+        // 3. Calculate CCIP fee
+        address sourceProver = ccipProver.getWhitelistedProver(sourceChainSelector);
+        bytes memory data = abi.encode(sourceProver, 500000); // 500k gas
+        
+        uint256 fee = ccipProver.fetchFee(sourceChainSelector, encodedProofs, data);
+        uint256 feeWithBuffer = fee * 110 / 100; // 10% buffer
+        
+        // 4. Send proof via CCIP
+        ccipProver.prove{value: feeWithBuffer}(
+            intent.hash,
+            sourceChainSelector,
+            encodedProofs,
+            data
+        );
+        
+        // 5. Refund excess fee
+        if (msg.value > feeWithBuffer) {
+            payable(msg.sender).transfer(msg.value - feeWithBuffer);
+        }
+    }
+}
+```
+
+## Related Documentation
+
+- [CCIPProver API Reference](/api/provers/ccip-prover) - Complete contract documentation
+- [Portal Contract](/api/portal) - Intent fulfillment and proving
+- [Inbox Contract](/api/inbox) - Destination chain operations
+
+## External Resources
+
+- [Chainlink CCIP Documentation](https://docs.chain.link/ccip)
+- [CCIP Supported Networks](https://docs.chain.link/ccip/supported-networks)
+- [CCIP Explorer](https://ccip.chain.link/)
+- [CCIP GitHub Repository](https://github.com/smartcontractkit/ccip)

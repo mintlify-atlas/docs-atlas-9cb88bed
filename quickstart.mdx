@@ -49,26 +49,54 @@ Before you begin, ensure you have the following installed:
 
 ## Installation
 
-<Steps>
-  <Step title="Clone the repository">
-    ```bash
-    git clone https://github.com/eco/eco-routes.git
-    cd eco-routes
-    ```
-  </Step>
+There are two ways to use Eco Routes: from source or as an npm package.
 
-  <Step title="Install dependencies">
-    ```bash
-    yarn install
-    ```
-  </Step>
+<Tabs>
+  <Tab title="From Source (Recommended)">
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/eco/eco-routes.git
+        cd eco-routes
+        ```
+      </Step>
 
-  <Step title="Build the project">
-    ```bash
-    yarn build
+      <Step title="Install dependencies">
+        ```bash
+        yarn install
+        ```
+      </Step>
+
+      <Step title="Build the project">
+        ```bash
+        yarn build
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="As NPM Package">
+    Install the published package to use the TypeScript utilities:
+
+    <CodeGroup>
+    ```bash npm
+    npm install @eco-foundation/routes
     ```
-  </Step>
-</Steps>
+
+    ```bash yarn
+    yarn add @eco-foundation/routes
+    ```
+
+    ```bash pnpm
+    pnpm add @eco-foundation/routes
+    ```
+    </CodeGroup>
+
+    <Note>
+      The npm package includes TypeScript utilities for encoding intents, hashing, and vault address calculation. To deploy contracts, you'll need to build from source.
+    </Note>
+  </Tab>
+</Tabs>
 
 ## Create your first intent
 

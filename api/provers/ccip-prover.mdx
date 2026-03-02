@@ -1,0 +1,259 @@
+---
+title: CCIPProver
+description: Chainlink CCIP prover implementation for cross-chain intent verification
+---
+
+# CCIPProver
+
+The `CCIPProver` contract implements cross-chain intent verification using Chainlink's Cross-Chain Interoperability Protocol (CCIP). It extends `MessageBridgeProver` to provide reliable message delivery with built-in security features.
+
+**Location**: `contracts/prover/CCIPProver.sol:22`
+
+## Overview
+
+CCIPProver uses Chainlink's decentralized oracle network to relay intent fulfillment proofs between chains. CCIP provides:
+
+- **Security**: Decentralized oracle verification with Risk Management Network
+- **Reliability**: Guaranteed message delivery with retry mechanisms
+- **Flexibility**: Support for multiple EVM chains with active/active routing
+- **Monitoring**: Built-in transaction tracking and status updates
+
+## Inheritance
+
+```solidity
+CCIPProver
+├── MessageBridgeProver (message-based proving)
+│   └── BaseProver (core proving logic)
+│       └── Whitelist (prover authorization)
+├── IAny2EVMMessageReceiver (CCIP message receiver)
+└── Semver (semantic versioning)
+```
+
+## State Variables
+
+<ParamField path="ROUTER" type="address" required>
+  The Chainlink CCIP Router contract address. Immutable value set at deployment.
+</ParamField>
+
+<ParamField path="PROOF_TYPE" type="string">
+  Returns `"CCIP"` as the proof type identifier.
+</ParamField>
+
+<ParamField path="MIN_GAS_LIMIT" type="uint256">
+  Minimum gas limit for cross-chain message execution (inherited from MessageBridgeProver). Defaults to 200,000 gas if not specified.
+</ParamField>
+
+## Constructor
+
+```solidity
+constructor(
+    address router,
+    address portal,
+    bytes32[] memory provers,
+    uint256 minGasLimit
+)
+```
+
+<ParamField path="router" type="address" required>
+  The CCIP Router contract address for the current chain. Must not be zero address.
+</ParamField>
+
+<ParamField path="portal" type="address" required>
+  The Portal contract address on this chain.
+</ParamField>
+
+<ParamField path="provers" type="bytes32[]" required>
+  Array of whitelisted prover addresses (as bytes32 for cross-VM compatibility).
+</ParamField>
+
+<ParamField path="minGasLimit" type="uint256">
+  Minimum gas limit for cross-chain messages. Pass 0 to use the default 200,000 gas.
+</ParamField>
+
+## Functions
+
+### prove
+
+```solidity
+function prove(
+    bytes32 intentHash,
+    uint64 sourceChainDomainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) external payable
+```
+
+Sends a proof message to the source chain via CCIP. The proof demonstrates that an intent was fulfilled on this destination chain.
+
+<ParamField path="intentHash" type="bytes32" required>
+  The hash of the intent being proven.
+</ParamField>
+
+<ParamField path="sourceChainDomainID" type="uint64" required>
+  The CCIP chain selector for the source chain. **Important**: This is CCIP's chain selector, NOT the standard chain ID.
+</ParamField>
+
+<ParamField path="encodedProofs" type="bytes" required>
+  ABI-encoded proof data containing intent hashes and claimants.
+</ParamField>
+
+<ParamField path="data" type="bytes" required>
+  ABI-encoded `UnpackedData` struct: `(address sourceChainProver, uint256 gasLimit)`
+</ParamField>
+
+<Warning>
+  CCIP has a maximum data payload size of **30KB** and a message execution gas limit of **3,000,000 gas**. Ensure your proof data and gas limits are within these bounds. Check [CCIP documentation](https://docs.chain.link/ccip) for current limits.
+</Warning>
+
+### ccipReceive
+
+```solidity
+function ccipReceive(
+    Client.Any2EVMMessage calldata message
+) external
+```
+
+Receives cross-chain proof messages from CCIP. Only callable by the CCIP Router contract.
+
+<ParamField path="message" type="Client.Any2EVMMessage" required>
+  The CCIP message containing:
+  - `sourceChainSelector`: The source chain selector
+  - `sender`: The sender address (ABI-encoded)
+  - `data`: The proof data payload
+  - `tokenAmounts`: Token transfers (unused, always empty)
+</ParamField>
+
+### fetchFee
+
+```solidity
+function fetchFee(
+    uint64 domainID,
+    bytes calldata encodedProofs,
+    bytes calldata data
+) public view returns (uint256)
+```
+
+Calculates the fee required to send a proof message to the specified chain.
+
+<ParamField path="domainID" type="uint64" required>
+  The destination chain selector (CCIP chain selector).
+</ParamField>
+
+<ParamField path="encodedProofs" type="bytes" required>
+  The proof data that will be sent.
+</ParamField>
+
+<ParamField path="data" type="bytes" required>
+  Additional data containing source chain prover and gas configuration.
+</ParamField>
+
+<ResponseField name="fee" type="uint256">
+  The fee amount in native tokens required to send the message.
+</ResponseField>
+
+### supportsInterface
+
+```solidity
+function supportsInterface(bytes4 interfaceId) public view returns (bool)
+```
+
+Checks if the contract supports a given interface. Returns true for `IAny2EVMMessageReceiver`.
+
+## Data Structures
+
+### UnpackedData
+
+```solidity
+struct UnpackedData {
+    address sourceChainProver;
+    uint256 gasLimit;
+}
+```
+
+<ParamField path="sourceChainProver" type="address">
+  The address of the prover contract on the source chain.
+</ParamField>
+
+<ParamField path="gasLimit" type="uint256">
+  The gas limit for message execution on the destination chain. Automatically enforced to be at least `MIN_GAS_LIMIT`.
+</ParamField>
+
+## CCIP Chain Selectors
+
+CCIP uses chain selectors instead of standard chain IDs. Common mappings:
+
+| Network | Chain ID | CCIP Chain Selector |
+|---------|----------|---------------------|
+| Ethereum Mainnet | 1 | 5009297550715157269 |
+| Ethereum Sepolia | 11155111 | 16015286601757825753 |
+| Polygon Mainnet | 137 | 4051577828743386545 |
+| Arbitrum One | 42161 | 4949039107694359620 |
+| Optimism Mainnet | 10 | 3734403246176062136 |
+| Base Mainnet | 8453 | 15971525489660198786 |
+| Avalanche C-Chain | 43114 | 6433500567565415381 |
+
+<Warning>
+  Always verify chain selectors in [CCIP's official documentation](https://docs.chain.link/ccip/supported-networks) as they may change.
+</Warning>
+
+## Usage Example
+
+```solidity
+// Deploy CCIPProver
+address ccipRouter = 0x...; // CCIP Router for this chain
+address portal = 0x...;     // Portal contract address
+bytes32[] memory whitelistedProvers = new bytes32[](1);
+whitelistedProvers[0] = bytes32(uint256(uint160(0x...))); // Source chain prover
+
+CCIPProver prover = new CCIPProver(
+    ccipRouter,
+    portal,
+    whitelistedProvers,
+    300000 // 300k gas minimum
+);
+
+// Query fee for proving
+bytes memory encodedProofs = abi.encode(intentHashes, claimants);
+bytes memory data = abi.encode(sourceChainProver, 500000); // 500k gas limit
+
+uint256 fee = prover.fetchFee(
+    5009297550715157269, // Ethereum Mainnet selector
+    encodedProofs,
+    data
+);
+
+// Send proof with payment
+prover.prove{value: fee}(
+    intentHash,
+    5009297550715157269,
+    encodedProofs,
+    data
+);
+```
+
+## Security Considerations
+
+1. **Whitelist Verification**: Only whitelisted provers can submit proofs
+2. **Router Authorization**: Only the CCIP Router can call `ccipReceive()`
+3. **Gas Limits**: Minimum gas limit enforced to prevent underfunded execution
+4. **Zero Address Checks**: Validates router, sender, and chain selector are non-zero
+5. **Out-of-Order Execution**: Enabled by default for optimal performance
+
+## Integration Notes
+
+- **Router Addresses**: Different on each chain - verify before deployment
+- **Fee Payment**: Fees paid in native token (ETH, MATIC, etc.)
+- **Message Tracking**: Use CCIP Explorer to monitor cross-chain messages
+- **Retry Mechanism**: CCIP handles retries automatically if execution fails
+
+## Related Contracts
+
+- [BaseProver](/api/provers/base-prover) - Core proving functionality
+- [MessageBridgeProver](/api/provers/base-prover#messagebridgeprover) - Message bridge abstraction
+- [Inbox](/api/inbox) - Intent fulfillment and proving
+
+## External Resources
+
+- [Chainlink CCIP Documentation](https://docs.chain.link/ccip)
+- [CCIP Supported Networks](https://docs.chain.link/ccip/supported-networks)
+- [CCIP Explorer](https://ccip.chain.link/)
